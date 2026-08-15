@@ -1,0 +1,23 @@
+{
+  "$schema": "https://mcp-locator.dev/schemas/v1/local-server-card.schema.json",
+  "name": "io.mcplocator.broker",
+  "version": "0.1.0",
+  "title": "mcp-locator Broker",
+  "description": "The mcp-locator broker daemon. Valid only in the system tier; launch is signature-verified by client libraries (spec/003 section 3).",
+  "local": {
+    "launch": {
+      "type": "executable",
+      "command": "%ProgramFiles%\\mcp-locator\\mcp-locator-broker.exe",
+      "args": []
+    },
+    "endpoint": {
+      "type": "pipe",
+      "address": "\\\\.\\pipe\\mcp-locator\\broker\\v1"
+    },
+    "lifetime": {
+      "idleTimeoutSeconds": 0,
+      "shutdown": "graceful"
+    }
+  },
+  "_meta": {}
+}
