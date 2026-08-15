@@ -1,0 +1,140 @@
+# Implementation Plan
+
+Language split (decided): **Rust** for the broker + consent helper, **TypeScript** for the client
+library and gateway shim. Contracts between components are the card files and the JSON-RPC pipe
+protocol — languages never share code, they share fixtures.
+
+Platform order: library is cross-platform from day one; the broker is **Windows-first**, with the
+pipe/launch/signature layers behind traits so the launchd/systemd ports (post-M3) are additive.
+
+## Repo layout (monorepo)
+
+```
+packages/schema/          JSON Schema for local-server-card v1 + versioned changelog
+packages/locator-ts/      client library (npm: @mcp-locator/client) + CLI
+packages/gateway/         M3 gateway shim (npm: @mcp-locator/gateway)
+broker/                   Rust cargo workspace
+  crates/broker/          daemon
+  crates/consent-ui/      consent helper (Win32 TaskDialog first)
+  crates/proto/           JSON-RPC types, launchHash canonicalization
+conformance/              language-neutral fixtures + expected outputs (used by TS now, ports later)
+spec/                     normative docs (already committed)
+```
+
+## M0 — Infrastructure (small, do immediately)
+
+- pnpm workspace + cargo workspace, MIT license, `.gitattributes` (eol normalization — first
+  commit already warned about CRLF), rustfmt/clippy/eslint/prettier config.
+- CI (GitHub Actions): windows-latest + ubuntu + macos matrix. Jobs: TS build/test, Rust
+  build/test (Windows only until port), schema-validate all `examples/` and `conformance/` cards.
+
+## M1 — Card schema + read-only TypeScript library
+
+Goal: `npm install @mcp-locator/client` is useful on its own, on all three OSes.
+
+1. **Schema** (`packages/schema`): JSON Schema draft 2020-12 for the card, including the SEP-2127
+   identity subset and the `local` block from spec/001 §3. CI validates every example/fixture.
+2. **Directory + parse layer**: tier path resolution per OS, card parsing with ajv, filename↔name
+   enforcement, env-var expansion, tier shadowing + conflict reporting, orphan detection
+   (launch.command missing ⇒ hidden by default), malformed cards surfaced as diagnostics not
+   throws.
+3. **Liveness**: `probablyRunning()` — pidfile (exists + PID alive) and/or endpoint probe
+   (named pipe / unix socket / loopback HTTP connect with short timeout).
+4. **Watching**: directory watchers (chokidar) → `onCatalogChanged` events, debounced.
+5. **Consent read view**: parse `consent.json` per spec/003 §4; returns `not-asked` for all when
+   the file is absent (broker doesn't exist yet — the file format ships before the writer).
+6. **Conformance suite** (`conformance/`): fixture registry trees + expected merged-catalog JSON
+   (shadowing, conflicts, orphans, malformed, env expansion, low tier). This is the spec's
+   executable form; every future port runs the same fixtures.
+7. **CLI** (`mcp-locator`): `ls` (catalog + state), `validate <card>`, `dirs`. Dogfooding and the
+   support tool for app developers writing their first card.
+
+Exit: v0.1 published; all conformance fixtures pass on the 3-OS CI matrix.
+Rough size: 1–2 weeks.
+
+## M2 — Broker (Rust, Windows) — the core milestone
+
+Build order chosen so each step is testable against the previous:
+
+1. **Pipe server + protocol** (`crates/proto`, `crates/broker`): newline-delimited JSON-RPC over
+   named pipe `\\.\pipe\mcp-locator\broker\v1`, SDDL ACL (user SID, low-IL allowed to connect),
+   `handshake`, `list`, `status`, `subscribe`. Transport behind a trait (unix socket later).
+2. **Derived catalog**: file-watch (notify crate) over the tier dirs; reuse conformance fixtures
+   as integration tests (same expected JSON as the TS library — this proves the two agree).
+3. **Activation engine**: spawn stdio children inside a job object (broker death ⇒ no orphans);
+   per-grant relay pipe `\\.\pipe\mcp-locator\conn\<grantId>` ACL'd to the requesting client's
+   token; grants table; client-death cleanup via `RegisterWaitForSingleObject` on duplicated
+   client process handles. One process per grant initially — the `shared` multiplex flag is
+   deliberately deferred.
+4. **Lifetime state machine**: spec/002 §4 verbatim — idle timers, graceful shutdown (close
+   stdin → grace → kill), `deactivate`/`force`, crash detection, `runtime.json` snapshot +
+   reconcile-on-start.
+5. **Consent**: `consent.json` writer, `launchHash` canonicalization (in `crates/proto`, with
+   cross-checked test vectors in `conformance/` so the TS read view agrees), consent helper
+   process using Win32 TaskDialog (name, publisher/signature status, tier badge, consent
+   summary; allow / allow-for-this-client / deny). Stale-consent re-prompt with launch diff.
+6. **Bootstrap hardening**: singleton named mutex; self-check that own path is under install
+   root; `WinVerifyTrust` verification helper used by both the TS library (via CLI subcommand
+   `mcp-locator verify-broker`) and `admin/supersede`; drain/handover.
+   Dev mode: `MCP_LOCATOR_DEV=1` skips signature checks with a loud stderr warning — needed
+   until there's a signing cert (see Risks).
+7. **TS library integration**: broker client in `@mcp-locator/client` — connect, launch-on-demand
+   bootstrap, `activate`/`release`/`deactivate`, subscriptions; single public API that degrades
+   from broker to brokerless transparently (`status` vs `probablyRunning` stay distinct).
+8. **Audit log** (append-only JSON lines) + `odr`-style CLI additions: `mcp-locator activate/
+   deactivate/status` against the live broker.
+9. **Installer**: WiX MSI — broker + consent helper to `%ProgramFiles%\mcp-locator\`, write the
+   broker system card, create tier dirs with the spec/003 §6 ACLs (explicit restrictive ACL on
+   the ProgramData `servers` dir, deny-low-IL ACE on the state dir).
+
+Exit (the demo that proves the model): two separate client processes activate `com.example.notes`;
+refcount holds one server; killing client A releases its grant; client B keeps working; closing B
+starts the idle timer; server exits gracefully; consent was prompted exactly once; audit log shows
+all of it.
+Rough size: 4–6 weeks. Steps 1–4 are the critical path; 5–6 are security-gated before any public
+release; 9 can trail.
+
+## M3 — Gateway shim (TypeScript)
+
+1. MCP server (official TS SDK, stdio) exposing `list_servers` / `activate` / `deactivate`
+   meta-tools.
+2. On activate: MCP client session to the granted connection, re-export tools namespaced
+   (`<shortname>.<tool>`), emit `notifications/tools/list_changed`; forward calls; mirror
+   resources/prompts later.
+3. Release-on-exit: gateway session end releases all its grants (broker PID-death handles the
+   crash case for free).
+4. Client onboarding docs: copy-paste config snippets for Claude Desktop, Claude Code, Cursor,
+   VS Code; end-to-end demo gif with a real client.
+
+Exit: unmodified Claude Desktop configured with only the gateway can discover, consent, use, and
+deactivate the example server.
+Rough size: 1–2 weeks.
+
+## M4 — Federation + upstream (incremental, in value order)
+
+1. **MSIX `appExtension` provider** (highest local value: the `package` trust tier).
+2. **Broker port** to macOS/Linux (unix sockets, codesign verification, launchd/systemd units).
+3. **Remote catalogs**: SEP-2127 `.well-known` fetcher; **mDNS** `_mcp._tcp` listener (separate
+   consent class per spec/003).
+4. **Windows ODR provider**: wrap `odr.exe` / the host API; revisit when ODR reaches GA.
+5. **Upstream**: propose "local server cards" as an extensions-track SEP — the spec/001 diff
+   against SEP-2127 plus the running implementation.
+
+## Cross-cutting
+
+- **Versioning**: schema version in `$schema` URL; `brokerProtocol` integer; additive-only within
+  v1. Conformance fixtures are tagged by schema version.
+- **Testing pyramid**: conformance fixtures (shared) → Rust integration tests spawning real
+  processes → one end-to-end smoke on Windows CI (broker + TS client + fake server).
+- **Security gates**: spec/003 checklist review before the first binary release; fuzz the card
+  parser and the pipe framing (cheap, high value — both parse attacker-controlled input).
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| No Authenticode cert early on | `MCP_LOCATOR_DEV=1` mode; buy OV/EV cert before first public MSI; Sigstore as interim for non-Windows |
+| Stdio relay latency/backpressure bugs | keep relay dumb (single duplex copy loop); e2e test with large payloads early in M2.3 |
+| launchHash canonicalization drift between Rust and TS | shared test vectors in `conformance/`; canonicalization spec'd byte-exact (JCS / RFC 8785) |
+| Consent UI spoofing concerns | helper is signed, launched only by broker, renders on interactive desktop; document in spec/003 |
+| ODR ships GA sooner than expected | architecture already treats it as a provider; no bet depends on it staying preview |
