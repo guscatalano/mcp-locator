@@ -1,0 +1,19 @@
+{
+  "name": "@mcp-locator/schema",
+  "version": "0.1.0",
+  "description": "JSON Schema for mcp-locator local server cards",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./schemas/v1/local-server-card.schema.json": "./schemas/v1/local-server-card.schema.json"
+  },
+  "files": [
+    "index.mjs",
+    "schemas/"
+  ],
+  "dependencies": {
+    "ajv": "^8.17.1"
+  }
+}

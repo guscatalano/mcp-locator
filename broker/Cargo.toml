@@ -1,0 +1,4 @@
+# M2: broker workspace. Crates land here per PLAN.md (crates/proto, crates/broker, crates/consent-ui).
+[workspace]
+resolver = "2"
+members = []
