@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  typescript:
     strategy:
       fail-fast: false
       matrix:
@@ -22,3 +22,25 @@ jobs:
       - run: npm run build
       - run: npm run validate
       - run: npm test
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: broker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: broker
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      # Includes the cross-language check that the Rust and TypeScript launch hashes agree.
+      - run: cargo test

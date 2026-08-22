@@ -60,11 +60,16 @@ Rough size: 1–2 weeks.
 
 Build order chosen so each step is testable against the previous:
 
-1. **Pipe server + protocol** (`crates/proto`, `crates/broker`): newline-delimited JSON-RPC over
-   named pipe `\\.\pipe\mcp-locator\broker\v1`, SDDL ACL (user SID, low-IL allowed to connect),
-   `handshake`, `list`, `status`, `subscribe`. Transport behind a trait (unix socket later).
-2. **Derived catalog**: file-watch (notify crate) over the tier dirs; reuse conformance fixtures
-   as integration tests (same expected JSON as the TS library — this proves the two agree).
+1. **Pipe server + protocol** (`crates/proto`, `crates/broker`) — *done, except as noted*:
+   newline-delimited JSON-RPC over named pipe `\\.\pipe\mcp-locator\broker\v1` (unix socket
+   elsewhere, so all three CI platforms build), `handshake`, `list`, `status`. Still open:
+   the SDDL ACL (user SID + low-IL connect ACE) and `subscribe`.
+2. **Derived catalog** — *done, except file-watching*: card parsing, tier shadowing, orphan
+   detection, and env expansion, driven by the same conformance fixtures as the TS library and
+   asserted against the same expected JSON. The notify-crate watcher is still to come.
+   Card validation is hand-written against the spec rules rather than embedding a JSON Schema
+   engine (which would dominate the broker's dependency tree); the fixtures are what keep the
+   two rule sets from drifting.
 3. **Activation engine**: spawn stdio children inside a job object (broker death ⇒ no orphans);
    per-grant relay pipe `\\.\pipe\mcp-locator\conn\<grantId>` ACL'd to the requesting client's
    token; grants table; client-death cleanup via `RegisterWaitForSingleObject` on duplicated
