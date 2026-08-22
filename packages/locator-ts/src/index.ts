@@ -25,3 +25,15 @@ export { probablyRunning, type LivenessOptions } from './liveness.js';
 export { readConsentState, consentFor, type ConsentOptions } from './consent.js';
 export { launchHash, canonicalize } from './launchHash.js';
 export { watchCatalog, type CatalogWatcher, type WatchOptions } from './watch.js';
+export {
+  BrokerClient,
+  BrokerError,
+  startBroker,
+  defaultBrokerAddress,
+  BROKER_PROTOCOL,
+  BROKER_CARD,
+  type BrokerClientOptions,
+  type BrokerServer,
+  type Grant,
+  type ServerState,
+} from './broker.js';

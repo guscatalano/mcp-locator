@@ -105,21 +105,25 @@ all of it.
 Rough size: 4–6 weeks. Steps 1–4 are the critical path; 5–6 are security-gated before any public
 release; 9 can trail.
 
-## M3 — Gateway shim (TypeScript)
+## M3 — Gateway shim (TypeScript) — *done*
 
-1. MCP server (official TS SDK, stdio) exposing `list_servers` / `activate` / `deactivate`
-   meta-tools.
-2. On activate: MCP client session to the granted connection, re-export tools namespaced
-   (`<shortname>.<tool>`), emit `notifications/tools/list_changed`; forward calls; mirror
-   resources/prompts later.
-3. Release-on-exit: gateway session end releases all its grants (broker PID-death handles the
-   crash case for free).
-4. Client onboarding docs: copy-paste config snippets for Claude Desktop, Claude Code, Cursor,
-   VS Code; end-to-end demo gif with a real client.
+1. ✔ MCP server (official TS SDK, stdio) exposing `list_servers` / `activate` / `deactivate`.
+   Uses the low-level `Server`, not `McpServer`: a gateway must pass upstream tools through with
+   their original JSON Schemas, and `registerTool` takes Zod shapes.
+2. ✔ On activate: MCP client session over the granted relay (custom socket transport, since the
+   broker hands out an address rather than a child process), tools re-exported as
+   `<alias>.<tool>`, `notifications/tools/list_changed` emitted. Resources and prompts still to
+   mirror.
+3. ✔ Release-on-exit, plus release-on-failed-handshake so a server that starts but does not
+   speak MCP cannot leave a dangling grant.
+4. ✔ Broker client in `@mcp-locator/client` (`BrokerClient`), with the spec/003 §3 bootstrap
+   rules enforced: system-tier card only, command must resolve inside the install root.
+   Signature verification still to come.
+5. ✔ Onboarding docs in the README. Still open: a demo recording with a real AI client.
 
-Exit: unmodified Claude Desktop configured with only the gateway can discover, consent, use, and
-deactivate the example server.
-Rough size: 1–2 weeks.
+Exit criterion met end to end: a real MCP client sees only the three meta-tools, discovers the
+demo server, activates it, watches `notes.echo` / `notes.add` appear mid-session, calls one and
+reaches the child process, then deactivates and watches them disappear.
 
 ## M4 — Federation + upstream (incremental, in value order)
 

@@ -1,0 +1,26 @@
+{
+  "name": "@mcp-locator/gateway",
+  "version": "0.1.0",
+  "description": "One MCP server that exposes every MCP server registered on this machine",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "bin": {
+    "mcp-locator-gateway": "./dist/src/index.js"
+  },
+  "files": [
+    "dist/src/"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test \"dist/test/**/*.test.js\""
+  },
+  "dependencies": {
+    "@mcp-locator/client": "*",
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.0"
+  }
+}

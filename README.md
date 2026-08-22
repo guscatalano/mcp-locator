@@ -73,12 +73,57 @@ tied to the client's PID. Deactivation is manual (`release`/`deactivate`) or saf
 idle timeout after the last grant is released, client PID death (the broker waits on the process
 handle, exactly as COM garbage-collects dead clients), or server PID death.
 
+## Try it
+
+Configure **one** MCP server in your AI client, once:
+
+```jsonc
+// Claude Desktop: claude_desktop_config.json — Cursor / VS Code / Claude Code use the same shape
+{
+  "mcpServers": {
+    "mcp-locator": {
+      "command": "node",
+      "args": ["<repo>/packages/gateway/dist/src/index.js"]
+    }
+  }
+}
+```
+
+From then on the client sees three tools — `list_servers`, `activate`, `deactivate` — and every
+server registered on the machine shows up through them, including ones installed *after* the
+client was configured. Activating one makes its tools appear in the same session:
+
+```
+tools before activation: list_servers, activate, deactivate
+activate com.example.notes
+  → Activated. 2 tool(s) now available as notes.*: echo, add
+tools after activation:  list_servers, activate, deactivate, notes.echo, notes.add
+```
+
+To see the whole stack locally:
+
+```bash
+npm install && npm run build
+cargo build --manifest-path broker/Cargo.toml
+
+# register the demo server, approve it, start the broker
+#   (approval is a deliberate human step — an AI client cannot grant it)
+broker/target/debug/mcp-locator-broker consent grant com.example.notes
+broker/target/debug/mcp-locator-broker serve &
+
+node packages/gateway/scripts/e2e-full-stack.mjs com.example.notes
+```
+
+`packages/gateway/scripts/demo-server.mjs` stands in for an installed app that ships an MCP
+server; register it by dropping a card in the user-tier directory (`mcp-locator dirs` prints the
+paths).
+
 ## Roadmap
 
 1. **M1 — Cards + read-only library.** Card schema, directory layout, brokerless enumeration and
    liveness hints. Useful immediately; trivially cross-platform.
 2. **M2 — Broker.** Activation, consent UI, refcounted lifetime, authoritative state, bootstrap.
-3. **M3 — Gateway shim.** A thin MCP server (`list_servers` / `activate` / `deactivate`
+3. **M3 — Gateway shim.** ✔ A thin MCP server (`list_servers` / `activate` / `deactivate`
    meta-tools, dynamic tool re-export with `tools/list_changed`) so unmodified AI clients get the
    full experience by configuring exactly one server, ever.
 4. **M4 — Federation providers.** mDNS (`_mcp._tcp`), remote `.well-known` catalogs (SEP-2127),
