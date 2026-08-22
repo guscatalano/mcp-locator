@@ -118,6 +118,31 @@ pub fn resolve_roots() -> Vec<Root> {
     }
 }
 
+/// State directory the broker owns: consent store, audit log, runtime snapshot (spec/002 §5).
+pub fn resolve_state_dir() -> PathBuf {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_default();
+
+    if cfg!(windows) {
+        std::env::var("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| home.join("AppData").join("Local"))
+            .join(APP)
+            .join("state")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library/Application Support")
+            .join(APP)
+            .join("state")
+    } else {
+        std::env::var("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| home.join(".local").join("state"))
+            .join(APP)
+    }
+}
+
 /// Default pipe/socket address the broker listens on (spec/002 §2).
 pub fn default_endpoint() -> String {
     if cfg!(windows) {

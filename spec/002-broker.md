@@ -77,15 +77,24 @@ since consent was given; see spec/003 §4).
 2. Ensure the server is running:
    - `launch.type: "stdio"` — the broker spawns the process and owns its stdio. The MCP byte
      stream is exposed to the client over a fresh per-activation pipe
-     (`\\.\pipe\mcp-locator\conn\<grantId>`); the broker relays pipe⇄stdio. One server process
-     serves all concurrent grants only if the server speaks a multiplex-capable transport;
-     otherwise the broker spawns one process per grant (card flag `local.launch.shared`, default
-     false for stdio).
+     (`\\.\pipe\mcp-locator\conn\<grantId>`); the broker relays pipe⇄stdio, without parsing or
+     rewriting the traffic. **One child process per grant**: an MCP stdio connection is a single
+     session, so sharing one child between two clients would interleave their traffic. Grant ids
+     embed the broker's PID so a restarted broker cannot collide with a lingering relay pipe.
    - `launch.type: "executable"` / endpoint-only — ensure the process is up (spawn if `launch`
-     present and not running), then return the card's endpoint directly.
-3. Register the grant: `(clientPid, name) → grantId`. The broker duplicates the client's process
-   handle and waits on it — client dies ⇒ all its grants are released automatically. This is the
-   COM dead-client garbage-collection model, verbatim.
+     present and not running), then return the card's endpoint directly. This child **is**
+     shared and refcounted across grants, and is where the idle timeout earns its keep.
+3. Register the grant against the **connection** that asked for it. When the connection ends the
+   broker releases every grant it held — a client that crashes, exits, or closes cleanly are
+   indistinguishable from here, which is the COM dead-client garbage-collection property without
+   needing to duplicate and wait on a process handle. The client's PID is still recorded, taken
+   from the connection itself (`GetNamedPipeClientProcessId` / `SO_PEERCRED`) rather than
+   self-reported, so audit entries and "who is holding this?" answers cannot be spoofed.
+
+   The tradeoff: a connection dropped while its client is alive releases that client's grants
+   early. Local pipes do not drop spuriously, and the client can re-activate, so this is
+   preferred over the liveness gap in the other direction — a wedged client holding servers open
+   forever because its process handle is still signalled.
 4. Return `{ grantId, connection: { type, address } }`. The client speaks plain MCP to that
    address; the broker is not in the data path for endpoint-mode servers and is a dumb byte relay
    for stdio-mode ones.

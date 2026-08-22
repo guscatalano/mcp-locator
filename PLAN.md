@@ -70,18 +70,20 @@ Build order chosen so each step is testable against the previous:
    Card validation is hand-written against the spec rules rather than embedding a JSON Schema
    engine (which would dominate the broker's dependency tree); the fixtures are what keep the
    two rule sets from drifting.
-3. **Activation engine**: spawn stdio children inside a job object (broker death ⇒ no orphans);
-   per-grant relay pipe `\\.\pipe\mcp-locator\conn\<grantId>` ACL'd to the requesting client's
-   token; grants table; client-death cleanup via `RegisterWaitForSingleObject` on duplicated
-   client process handles. One process per grant initially — the `shared` multiplex flag is
-   deliberately deferred.
-4. **Lifetime state machine**: spec/002 §4 verbatim — idle timers, graceful shutdown (close
-   stdin → grace → kill), `deactivate`/`force`, crash detection, `runtime.json` snapshot +
+3. **Activation engine** — *done*: stdio children spawned inside a job object (broker death ⇒
+   no orphans), per-grant relay pipe `\\.\pipe\mcp-locator\conn\<grantId>`, grants table, and
+   client-death cleanup via connection close rather than process-handle waiting (see spec/002 §3
+   for why). One child per grant for stdio; refcounted sharing for endpoint-mode servers.
+   Still open: ACLing each relay pipe to the requesting client's token.
+4. **Lifetime state machine** — *mostly done*: idle timers, graceful shutdown (close stdin →
+   grace → kill), `deactivate`/`force` naming its holders, and the registered/running/idle
+   transitions. Still open: server-crash detection and the `runtime.json` snapshot +
    reconcile-on-start.
-5. **Consent**: `consent.json` writer, `launchHash` canonicalization (in `crates/proto`, with
-   cross-checked test vectors in `conformance/` so the TS read view agrees), consent helper
-   process using Win32 TaskDialog (name, publisher/signature status, tier badge, consent
-   summary; allow / allow-for-this-client / deny). Stale-consent re-prompt with launch diff.
+5. **Consent** — *store done, UI open*: `consent.json` writer with atomic replace, `launchHash`
+   binding with stale detection, and enforcement at activation. Approval is currently given via
+   `mcp-locator-broker consent grant`, which deliberately keeps it a human CLI step no AI client
+   can trigger. Still open: the Win32 TaskDialog helper (name, publisher/signature status, tier
+   badge, consent summary; allow / allow-for-this-client / deny) and the stale re-prompt diff.
 6. **Bootstrap hardening**: singleton named mutex; self-check that own path is under install
    root; `WinVerifyTrust` verification helper used by both the TS library (via CLI subcommand
    `mcp-locator verify-broker`) and `admin/supersede`; drain/handover.

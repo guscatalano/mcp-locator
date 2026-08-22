@@ -3,17 +3,44 @@
 //! Framing is newline-delimited JSON-RPC. The transport differs per platform — Windows named
 //! pipes, unix sockets elsewhere — but dispatch is shared, which is what keeps the later
 //! platform ports additive.
+//!
+//! Grants are scoped to the connection that took them. That subsumes client-process death:
+//! a client that crashes, exits, or closes cleanly all look identical from here, so its servers
+//! are reclaimed without watching process handles.
 
-use crate::catalog::{enumerate, Catalog, EnumerateOptions};
-use crate::dirs::resolve_roots;
+use crate::activation::{ActivateError, Engine};
+use crate::catalog::{enumerate, Catalog, Entry, EnumerateOptions};
+use crate::dirs::{resolve_roots, resolve_state_dir};
 use mcp_locator_proto::rpc::{
     HandshakeResult, Request, Response, ServerState, BROKER_PROTOCOL, INVALID_PARAMS,
     INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
 };
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::Mutex;
 
 const BROKER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Broker error codes live below the JSON-RPC reserved range.
+pub const CONSENT_REQUIRED: i32 = -32000;
+pub const ACTIVATION_FAILED: i32 = -32001;
+pub const IN_USE: i32 = -32002;
+
+static NEXT_CONNECTION: AtomicU64 = AtomicU64::new(0);
+
+pub struct Broker {
+    pub engine: Mutex<Engine>,
+}
+
+impl Broker {
+    pub fn new(engine: Engine) -> Arc<Self> {
+        Arc::new(Self {
+            engine: Mutex::new(engine),
+        })
+    }
+}
 
 fn current_catalog(include_orphaned: bool) -> Catalog {
     let lookup = |name: &str| std::env::var(name).ok();
@@ -24,14 +51,42 @@ fn current_catalog(include_orphaned: bool) -> Catalog {
     })
 }
 
-/// Handle one request. Read-only in this slice: activation, consent, and lifetime methods are
-/// deliberately absent rather than stubbed, so a client cannot mistake a stub for a grant.
-pub fn dispatch(request: &Request) -> Response {
+fn find_entry(name: &str) -> Option<Entry> {
+    current_catalog(true)
+        .entries
+        .into_iter()
+        .find(|e| e.name == name)
+}
+
+/// Handle one request on behalf of one connection.
+pub async fn dispatch(
+    broker: &Arc<Broker>,
+    request: &Request,
+    connection: u64,
+    client_pid: Option<u32>,
+) -> Response {
     let id = request.id.clone();
 
     if request.jsonrpc != "2.0" {
         return Response::err(id, INVALID_REQUEST, "jsonrpc must be \"2.0\"");
     }
+
+    let param_str = |key: &str| -> Option<String> {
+        request
+            .params
+            .as_ref()
+            .and_then(|p| p.get(key))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    };
+    let param_bool = |key: &str| -> bool {
+        request
+            .params
+            .as_ref()
+            .and_then(|p| p.get(key))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    };
 
     match request.method.as_str() {
         "locator/handshake" => Response::ok(
@@ -44,18 +99,16 @@ pub fn dispatch(request: &Request) -> Response {
         ),
 
         "locator/list" => {
-            let include_orphaned = request
-                .params
-                .as_ref()
-                .and_then(|p| p.get("includeOrphaned"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let catalog = current_catalog(param_bool("includeOrphaned"));
+            let mut engine = broker.engine.lock().await;
 
-            let catalog = current_catalog(include_orphaned);
             let servers: Vec<Value> = catalog
                 .entries
                 .iter()
                 .map(|entry| {
+                    let consent = engine.consent.evaluate(&entry.name, &entry.launch_hash);
+                    let grants = engine.grant_count(&entry.name);
+                    let running = engine.is_running(&entry.name);
                     json!({
                         "name": entry.name,
                         "version": entry.version,
@@ -65,7 +118,9 @@ pub fn dispatch(request: &Request) -> Response {
                         "path": entry.path,
                         "orphaned": entry.orphaned,
                         "launchHash": entry.launch_hash,
-                        "state": state_of(entry.orphaned),
+                        "state": state_of(entry.orphaned, running, grants),
+                        "consent": consent,
+                        "grants": grants,
                         "shadowed": entry.shadowed,
                     })
                 })
@@ -78,29 +133,92 @@ pub fn dispatch(request: &Request) -> Response {
         }
 
         "locator/status" => {
-            let Some(name) = request
-                .params
-                .as_ref()
-                .and_then(|p| p.get("name"))
-                .and_then(|v| v.as_str())
-            else {
+            let Some(name) = param_str("name") else {
                 return Response::err(id, INVALID_PARAMS, "`name` is required");
             };
+            let Some(entry) = find_entry(&name) else {
+                return Response::err(id, INVALID_PARAMS, format!("unknown server: {name}"));
+            };
 
-            let catalog = current_catalog(true);
-            match catalog.entries.iter().find(|e| e.name == name) {
-                None => Response::err(id, INVALID_PARAMS, format!("unknown server: {name}")),
-                Some(entry) => Response::ok(
+            let mut engine = broker.engine.lock().await;
+            let grants = engine.grant_count(&name);
+            let running = engine.is_running(&name);
+            let consent = engine.consent.evaluate(&name, &entry.launch_hash);
+
+            Response::ok(
+                id,
+                json!({
+                    "name": name,
+                    "state": state_of(entry.orphaned, running, grants),
+                    "grants": grants,
+                    "holders": engine.holders(&name),
+                    "consent": consent,
+                }),
+            )
+        }
+
+        "locator/consent/query" => {
+            let Some(name) = param_str("name") else {
+                return Response::err(id, INVALID_PARAMS, "`name` is required");
+            };
+            let Some(entry) = find_entry(&name) else {
+                return Response::err(id, INVALID_PARAMS, format!("unknown server: {name}"));
+            };
+            let engine = broker.engine.lock().await;
+            Response::ok(
+                id,
+                json!(engine.consent.evaluate(&name, &entry.launch_hash)),
+            )
+        }
+
+        "locator/activate" => {
+            let Some(name) = param_str("name") else {
+                return Response::err(id, INVALID_PARAMS, "`name` is required");
+            };
+            let Some(entry) = find_entry(&name) else {
+                return Response::err(id, INVALID_PARAMS, format!("unknown server: {name}"));
+            };
+
+            let mut engine = broker.engine.lock().await;
+            match engine.activate(&entry, connection, client_pid).await {
+                Ok(result) => Response::ok(id, json!(result)),
+                // Consent gets its own code so clients can route it to a "ask the user" path
+                // rather than surfacing it as a generic failure.
+                Err(e @ ActivateError::ConsentRequired { .. }) => {
+                    Response::err(id, CONSENT_REQUIRED, e.to_string())
+                }
+                Err(e) => Response::err(id, ACTIVATION_FAILED, e.to_string()),
+            }
+        }
+
+        "locator/release" => {
+            let Some(grant_id) = param_str("grantId") else {
+                return Response::err(id, INVALID_PARAMS, "`grantId` is required");
+            };
+            let released = broker.engine.lock().await.release(&grant_id).await;
+            if released {
+                Response::ok(id, json!({ "released": grant_id }))
+            } else {
+                Response::err(id, INVALID_PARAMS, format!("unknown grant: {grant_id}"))
+            }
+        }
+
+        "locator/deactivate" => {
+            let Some(name) = param_str("name") else {
+                return Response::err(id, INVALID_PARAMS, "`name` is required");
+            };
+            let force = param_bool("force");
+            let mut engine = broker.engine.lock().await;
+            match engine.deactivate(&name, force).await {
+                Ok(count) => Response::ok(id, json!({ "name": name, "grantsReleased": count })),
+                // Naming the holders is what lets a user decide whether forcing is safe.
+                Err(holders) => Response::err(
                     id,
-                    json!({
-                        "name": entry.name,
-                        "state": state_of(entry.orphaned),
-                        // No activation engine yet, so there are no grants to report and no
-                        // process to have started. Reported honestly rather than faked.
-                        "grants": 0,
-                        "pid": Value::Null,
-                        "since": Value::Null,
-                    }),
+                    IN_USE,
+                    format!(
+                        "{name} is in use by {}; pass force to stop it anyway",
+                        holders.join(", ")
+                    ),
                 ),
             }
         }
@@ -109,55 +227,91 @@ pub fn dispatch(request: &Request) -> Response {
     }
 }
 
-fn state_of(orphaned: bool) -> ServerState {
-    if orphaned {
-        ServerState::Orphaned
-    } else {
-        ServerState::Registered
+fn state_of(orphaned: bool, running: bool, grants: usize) -> ServerState {
+    match (orphaned, running, grants) {
+        (true, _, _) => ServerState::Orphaned,
+        (_, true, 0) => ServerState::Idle,
+        (_, true, _) => ServerState::Running,
+        _ => ServerState::Registered,
     }
 }
 
-/// Serve newline-delimited JSON-RPC over one connection until the peer disconnects.
-pub async fn serve_connection<S>(stream: S) -> std::io::Result<()>
+/// Serve newline-delimited JSON-RPC over one connection, releasing its grants when it ends.
+pub async fn serve_connection<S>(
+    broker: Arc<Broker>,
+    stream: S,
+    client_pid: Option<u32>,
+) -> std::io::Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
+    let connection = NEXT_CONNECTION.fetch_add(1, Ordering::Relaxed);
     let (read_half, mut write_half) = tokio::io::split(stream);
     let mut lines = BufReader::new(read_half).lines();
 
-    while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
+    let result = async {
+        while let Some(line) = lines.next_line().await? {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let response = match serde_json::from_str::<Request>(&line) {
+                Ok(request) => dispatch(&broker, &request, connection, client_pid).await,
+                // Without a parsed id, JSON-RPC says to answer with a null id.
+                Err(e) => Response::err(Value::Null, PARSE_ERROR, e.to_string()),
+            };
+
+            let mut encoded = serde_json::to_string(&response).unwrap_or_else(|e| {
+                format!(
+                    r#"{{"jsonrpc":"2.0","id":null,"error":{{"code":-32603,"message":"{e}"}}}}"#
+                )
+            });
+            encoded.push('\n');
+            write_half.write_all(encoded.as_bytes()).await?;
+            write_half.flush().await?;
         }
-
-        let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => dispatch(&request),
-            // Without a parsed id, JSON-RPC says to answer with a null id.
-            Err(e) => Response::err(Value::Null, PARSE_ERROR, e.to_string()),
-        };
-
-        let mut encoded = serde_json::to_string(&response).unwrap_or_else(|e| {
-            format!(r#"{{"jsonrpc":"2.0","id":null,"error":{{"code":-32603,"message":"{e}"}}}}"#)
-        });
-        encoded.push('\n');
-        write_half.write_all(encoded.as_bytes()).await?;
-        write_half.flush().await?;
+        Ok::<(), std::io::Error>(())
     }
+    .await;
 
-    Ok(())
+    // Runs whether the loop ended cleanly or the connection broke: a crashed client must not
+    // leave its servers running.
+    broker
+        .engine
+        .lock()
+        .await
+        .release_connection(connection)
+        .await;
+    result
+}
+
+/// Stop servers whose idle window has elapsed. Driven on a tick rather than from a timer
+/// callback so every lifetime decision happens under the same lock.
+pub fn spawn_idle_reaper(broker: Arc<Broker>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            ticker.tick().await;
+            broker.engine.lock().await.reap_idle().await;
+        }
+    });
+}
+
+pub fn state_dir() -> std::path::PathBuf {
+    resolve_state_dir()
 }
 
 #[cfg(windows)]
-pub async fn listen(endpoint: &str) -> std::io::Result<()> {
+pub async fn listen(broker: Arc<Broker>, endpoint: &str) -> std::io::Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
-    // NOTE (spec/003 §5): this uses the default pipe security descriptor. Explicit SDDL — user
-    // SID plus a connect-only ACE for low integrity — lands with the hardening step. Everything
-    // served here is already world-readable card data, so the gap is bounded to that.
+    // NOTE (spec/003 §5): default pipe security descriptor for now. Explicit SDDL — user SID
+    // plus a connect-only ACE for low integrity — lands with the hardening step.
     eprintln!("mcp-locator broker listening on {endpoint}");
     let mut server = ServerOptions::new()
         .first_pipe_instance(true)
         .create(endpoint)?;
+    spawn_idle_reaper(Arc::clone(&broker));
 
     loop {
         server.connect().await?;
@@ -166,8 +320,10 @@ pub async fn listen(endpoint: &str) -> std::io::Result<()> {
         // request handling would get ERROR_PIPE_BUSY.
         server = ServerOptions::new().create(endpoint)?;
 
+        let client_pid = crate::activation::peer_pid(&connected);
+        let broker = Arc::clone(&broker);
         tokio::spawn(async move {
-            if let Err(e) = serve_connection(connected).await {
+            if let Err(e) = serve_connection(broker, connected, client_pid).await {
                 eprintln!("connection error: {e}");
             }
         });
@@ -175,7 +331,7 @@ pub async fn listen(endpoint: &str) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-pub async fn listen(endpoint: &str) -> std::io::Result<()> {
+pub async fn listen(broker: Arc<Broker>, endpoint: &str) -> std::io::Result<()> {
     use tokio::net::UnixListener;
 
     // A socket file from a previous run blocks bind; the singleton mutex is what actually
@@ -183,11 +339,14 @@ pub async fn listen(endpoint: &str) -> std::io::Result<()> {
     let _ = std::fs::remove_file(endpoint);
     let listener = UnixListener::bind(endpoint)?;
     eprintln!("mcp-locator broker listening on {endpoint}");
+    spawn_idle_reaper(Arc::clone(&broker));
 
     loop {
         let (stream, _) = listener.accept().await?;
+        let client_pid = crate::activation::peer_pid(&stream);
+        let broker = Arc::clone(&broker);
         tokio::spawn(async move {
-            if let Err(e) = serve_connection(stream).await {
+            if let Err(e) = serve_connection(broker, stream, client_pid).await {
                 eprintln!("connection error: {e}");
             }
         });
