@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @mcp-locator/client -w @mcp-locator/gateway --if-present",
     "test": "npm test --workspaces --if-present",
     "validate": "node packages/schema/scripts/validate.mjs examples conformance"
   },
