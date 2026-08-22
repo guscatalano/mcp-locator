@@ -1,0 +1,8 @@
+{
+  "name": "com.example.shadowed",
+  "version": "2.0.0",
+  "description": "System-tier copy. Must win over the user-tier card of the same name.",
+  "local": {
+    "launch": { "type": "stdio", "command": "${FIXTURE_ROOT}/bin/present.exe" }
+  }
+}

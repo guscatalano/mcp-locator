@@ -1,0 +1,21 @@
+{
+  "entries": [
+    { "name": "com.example.endpointonly", "tier": "user", "version": "3.1.0", "orphaned": false, "shadowedTiers": [], "command": null },
+    { "name": "com.example.lowtrust", "tier": "low", "version": "0.1.0", "orphaned": false, "shadowedTiers": [], "command": "bin/present.exe" },
+    { "name": "com.example.orphaned", "tier": "user", "version": "0.9.0", "orphaned": true, "shadowedTiers": [], "command": "bin/gone.exe" },
+    { "name": "com.example.present", "tier": "user", "version": "1.4.2", "orphaned": false, "shadowedTiers": [], "command": "bin/present.exe" },
+    { "name": "com.example.shadowed", "tier": "system", "version": "2.0.0", "orphaned": false, "shadowedTiers": ["user"], "command": "bin/present.exe" }
+  ],
+  "diagnostics": [
+    { "code": "filename-mismatch", "name": "com.example.actualname" },
+    { "code": "malformed-json", "name": null },
+    { "code": "schema-invalid", "name": "com.example.badschema" },
+    { "code": "shadowed", "name": "com.example.shadowed" }
+  ],
+  "visibleByDefault": [
+    "com.example.endpointonly",
+    "com.example.lowtrust",
+    "com.example.present",
+    "com.example.shadowed"
+  ]
+}

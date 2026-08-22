@@ -1,0 +1,9 @@
+{
+  "name": "com.example.endpointonly",
+  "version": "3.1.0",
+  "description": "No launch stanza: this server only exists while its app is already running.",
+  "local": {
+    "endpoint": { "type": "pipe", "address": "\\\\.\\pipe\\example-endpointonly" },
+    "liveness": { "probe": true }
+  }
+}

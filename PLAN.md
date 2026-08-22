@@ -23,8 +23,10 @@ spec/                     normative docs (already committed)
 
 ## M0 — Infrastructure (small, do immediately)
 
-- pnpm workspace + cargo workspace, MIT license, `.gitattributes` (eol normalization — first
+- npm workspace + cargo workspace, MIT license, `.gitattributes` (eol normalization — first
   commit already warned about CRLF), rustfmt/clippy/eslint/prettier config.
+  (Substituted npm for pnpm: corepack could not install pnpm shims without admin rights, and
+  npm workspaces cover everything this repo needs.)
 - CI (GitHub Actions): windows-latest + ubuntu + macos matrix. Jobs: TS build/test, Rust
   build/test (Windows only until port), schema-validate all `examples/` and `conformance/` cards.
 
@@ -40,7 +42,9 @@ Goal: `npm install @mcp-locator/client` is useful on its own, on all three OSes.
    throws.
 3. **Liveness**: `probablyRunning()` — pidfile (exists + PID alive) and/or endpoint probe
    (named pipe / unix socket / loopback HTTP connect with short timeout).
-4. **Watching**: directory watchers (chokidar) → `onCatalogChanged` events, debounced.
+4. **Watching**: directory watchers → `onCatalogChanged` events, debounced. (Built on `node:fs`
+   watch rather than chokidar: this library gets embedded in AI clients, so its dependency
+   surface stays at the schema validator alone.)
 5. **Consent read view**: parse `consent.json` per spec/003 §4; returns `not-asked` for all when
    the file is absent (broker doesn't exist yet — the file format ships before the writer).
 6. **Conformance suite** (`conformance/`): fixture registry trees + expected merged-catalog JSON

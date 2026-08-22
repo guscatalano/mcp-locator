@@ -1,0 +1,5 @@
+{
+  "name": "com.example.broken",
+  "version": "1.0.0",
+  "description": "trailing comma makes this invalid JSON",
+}

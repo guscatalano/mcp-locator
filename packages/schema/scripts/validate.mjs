@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Validates every *.card.json under the given files/directories against the v1 card schema.
 // Usage: node validate.mjs <file-or-dir> [...]
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { localServerCardV1 } from '../index.mjs';
@@ -21,6 +21,7 @@ function* cardFiles(path) {
 let failures = 0;
 let count = 0;
 for (const root of process.argv.slice(2)) {
+  if (!existsSync(root)) continue;
   for (const file of cardFiles(root)) {
     count++;
     let card;

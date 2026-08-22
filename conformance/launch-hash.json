@@ -1,0 +1,90 @@
+{
+  "$comment": "Cross-language test vectors for RFC 8785 canonicalization and launchHash (spec/003 section 4). Every implementation must reproduce `canonical` byte-for-byte and `launchHash` exactly.",
+  "vectors": [
+    {
+      "description": "stdio launch with args",
+      "card": {
+        "name": "com.example.present",
+        "version": "1.4.2",
+        "description": "x",
+        "local": {
+          "launch": {
+            "type": "stdio",
+            "command": "C:\\Program Files\\App\\app.exe",
+            "args": [
+              "--serve"
+            ]
+          }
+        }
+      },
+      "canonical": "{\"endpoint\":null,\"launch\":{\"args\":[\"--serve\"],\"command\":\"C:\\\\Program Files\\\\App\\\\app.exe\",\"type\":\"stdio\"}}",
+      "launchHash": "sha256:da39a5168a1c54d3ff0f261f4f2aa1305e1757f376ae9121f154a782fbc7e3da"
+    },
+    {
+      "description": "executable launch with a named pipe endpoint",
+      "card": {
+        "name": "com.example.pipe",
+        "version": "1.0.0",
+        "description": "x",
+        "local": {
+          "launch": {
+            "type": "executable",
+            "command": "/usr/bin/app",
+            "args": []
+          },
+          "endpoint": {
+            "type": "pipe",
+            "address": "\\\\.\\pipe\\example"
+          }
+        }
+      },
+      "canonical": "{\"endpoint\":{\"address\":\"\\\\\\\\.\\\\pipe\\\\example\",\"type\":\"pipe\"},\"launch\":{\"args\":[],\"command\":\"/usr/bin/app\",\"type\":\"executable\"}}",
+      "launchHash": "sha256:5e25357b6c0da6c69765db6ed394d0921d2df73479e51900ab72b12865507c72"
+    },
+    {
+      "description": "endpoint-only card, no launch stanza",
+      "card": {
+        "name": "com.example.endpointonly",
+        "version": "3.1.0",
+        "description": "x",
+        "local": {
+          "endpoint": {
+            "type": "streamable-http",
+            "address": "http://127.0.0.1:7000/mcp"
+          }
+        }
+      },
+      "canonical": "{\"endpoint\":{\"address\":\"http://127.0.0.1:7000/mcp\",\"type\":\"streamable-http\"},\"launch\":null}",
+      "launchHash": "sha256:e614629a09ae7fa2d0dd517f8a7b49a07fd3ff78f4de64acaadd58f6c3f497a4"
+    },
+    {
+      "description": "unicode and escapes in command and env",
+      "card": {
+        "name": "com.example.unicode",
+        "version": "1.0.0",
+        "description": "x",
+        "local": {
+          "launch": {
+            "type": "stdio",
+            "command": "C:\\Ünïcodé\\日本語\\app.exe",
+            "env": {
+              "QUOTE": "say \"hi\"\n"
+            }
+          }
+        }
+      },
+      "canonical": "{\"endpoint\":null,\"launch\":{\"command\":\"C:\\\\Ünïcodé\\\\日本語\\\\app.exe\",\"env\":{\"QUOTE\":\"say \\\"hi\\\"\\n\"},\"type\":\"stdio\"}}",
+      "launchHash": "sha256:da699330f824bb8797d9887cc1ad5e4379cc83c47ce142525efabbcbc5e254db"
+    },
+    {
+      "description": "no local block at all",
+      "card": {
+        "name": "com.example.remoteonly",
+        "version": "1.0.0",
+        "description": "x"
+      },
+      "canonical": "{\"endpoint\":null,\"launch\":null}",
+      "launchHash": "sha256:ec39cbfaf718e317860fe2d17c57b5b98b279d60dab41792db4adb63004d89c5"
+    }
+  ]
+}

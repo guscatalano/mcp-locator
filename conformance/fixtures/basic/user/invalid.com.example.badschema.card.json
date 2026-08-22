@@ -1,0 +1,8 @@
+{
+  "name": "com.example.badschema",
+  "version": "1.0.0",
+  "description": "Declares an executable launch without the endpoint that rule requires.",
+  "local": {
+    "launch": { "type": "executable", "command": "${FIXTURE_ROOT}/bin/present.exe" }
+  }
+}

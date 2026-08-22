@@ -1,0 +1,15 @@
+{
+  "name": "com.example.present",
+  "version": "1.4.2",
+  "title": "Present",
+  "description": "Ordinary healthy card: launch command exists, so it is not orphaned.",
+  "local": {
+    "launch": {
+      "type": "stdio",
+      "command": "${FIXTURE_ROOT}/bin/present.exe",
+      "args": ["--serve"]
+    },
+    "lifetime": { "idleTimeoutSeconds": 300, "shutdown": "graceful" },
+    "consent": { "summary": "Can do the thing." }
+  }
+}

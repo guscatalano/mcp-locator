@@ -1,0 +1,8 @@
+{
+  "name": "com.example.orphaned",
+  "version": "0.9.0",
+  "description": "Launch command does not exist — a failed uninstall. Hidden unless --all.",
+  "local": {
+    "launch": { "type": "stdio", "command": "${FIXTURE_ROOT}/bin/gone.exe" }
+  }
+}

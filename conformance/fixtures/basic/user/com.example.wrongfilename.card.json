@@ -1,0 +1,8 @@
+{
+  "name": "com.example.actualname",
+  "version": "1.0.0",
+  "description": "Filename does not match the name field — rejected as a squatting defense.",
+  "local": {
+    "launch": { "type": "stdio", "command": "${FIXTURE_ROOT}/bin/present.exe" }
+  }
+}

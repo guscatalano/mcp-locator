@@ -1,0 +1,8 @@
+{
+  "name": "com.example.shadowed",
+  "version": "1.0.0",
+  "description": "User-tier copy. Must be shadowed by the system-tier card and reported.",
+  "local": {
+    "launch": { "type": "stdio", "command": "${FIXTURE_ROOT}/bin/present.exe" }
+  }
+}

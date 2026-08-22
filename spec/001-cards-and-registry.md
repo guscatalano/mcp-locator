@@ -110,8 +110,11 @@ Rules:
 Required fields: `name`, `version`, `description`, and at least one of `local.launch`,
 `local.endpoint`, or a non-empty `remotes`. Everything else is optional.
 
-Environment-variable expansion (`%VAR%` on Windows, `${VAR}` elsewhere) is applied to `command`,
-`cwd`, `endpoint.address`, and `liveness.pidFile` at read time, in the *reader's* environment.
+Environment-variable expansion is applied to `command`, `args`, `cwd`, `launch.env` values,
+`endpoint.address`, and `liveness.pidFile` at read time, in the *reader's* environment. Both
+`%VAR%` and `${VAR}` are accepted on every platform, so one card file stays portable. Unknown
+variables are left verbatim rather than expanded to empty — silently emptying a path would turn
+a typo into a launch of the wrong file.
 
 ## 4. Brokerless reads
 

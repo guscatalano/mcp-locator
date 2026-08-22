@@ -1,0 +1,8 @@
+{
+  "name": "com.example.lowtrust",
+  "version": "0.1.0",
+  "description": "Registered from a low-integrity process. Discoverable, but flagged low trust.",
+  "local": {
+    "launch": { "type": "stdio", "command": "${FIXTURE_ROOT}/bin/present.exe" }
+  }
+}
