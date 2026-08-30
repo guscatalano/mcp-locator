@@ -165,9 +165,21 @@ fn prompt(request: &Request) -> i32 {
     })
 }
 
+/// Until there is a native prompt on this platform, print what would have been asked and
+/// refuse. Writing it out is not decoration: the broker logs this stream, so a maintainer
+/// bringing up the unix port can see the exact question the dialog would have posed, and a
+/// user who hits the refusal learns which server wanted what rather than only that something
+/// was denied.
 #[cfg(not(windows))]
-fn prompt(_request: &Request) -> i32 {
+fn prompt(request: &Request) -> i32 {
     eprintln!("mcp-locator-consent: no interactive prompt on this platform yet");
+    eprintln!("{}", request.instruction());
+    eprintln!("{}", request.content());
+    eprintln!("{}", request.expanded());
+    let footer = request.footer();
+    if !footer.is_empty() {
+        eprintln!("{footer}");
+    }
     UNSUPPORTED
 }
 
@@ -308,6 +320,17 @@ mod tests {
         assert!(req.footer().contains("running as you"));
         req.tier = "system".into();
         assert!(req.footer().is_empty());
+    }
+
+    #[test]
+    fn details_name_the_card_and_its_origin() {
+        let mut req = request();
+        req.card = "/etc/mcp-locator/servers/com.example.notes.card.json".into();
+        let detail = req.expanded();
+        // Whoever opens the expander is checking provenance, so the two facts that establish
+        // it — what runs and which file asked for it — have to be there.
+        assert!(detail.contains("notes-mcp.exe"));
+        assert!(detail.contains("com.example.notes.card.json"));
     }
 
     #[test]
