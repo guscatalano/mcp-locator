@@ -156,6 +156,11 @@ reaches the child process, then deactivates and watches them disappear.
   v1. Conformance fixtures are tagged by schema version.
 - **Testing pyramid**: conformance fixtures (shared) → Rust integration tests spawning real
   processes → one end-to-end smoke on Windows CI (broker + TS client + fake server).
+- **Cross-target lint before pushing.** Half the broker is behind `cfg(windows)`, so a
+  Windows-only `cargo clippy` cannot see the other half — code reachable only from the Windows
+  module reads as dead on unix. Catch it locally with
+  `cargo clippy --all-targets --target x86_64-unknown-linux-gnu -- -D warnings`
+  (`rustup target add` once; no linker needed, since clippy does not link).
 - **Security gates**: spec/003 checklist review before the first binary release; fuzz the card
   parser and the pipe framing (cheap, high value — both parse attacker-controlled input).
 
