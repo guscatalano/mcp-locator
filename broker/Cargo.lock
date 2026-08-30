@@ -96,6 +96,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp-locator-consent"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "mcp-locator-proto"
 version = "0.1.0"
 dependencies = [

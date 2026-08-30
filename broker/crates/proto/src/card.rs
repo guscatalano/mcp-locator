@@ -61,6 +61,15 @@ pub struct Lifetime {
     pub idle_timeout_seconds: Option<u64>,
 }
 
+/// The one-line description the consent prompt shows. It comes from the card, which means the
+/// app wrote it — the dialog says so, and pairs it with the launch command the OS will actually
+/// run, so a flattering summary cannot stand in for the facts.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Consent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LocalBlock {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +80,8 @@ pub struct LocalBlock {
     pub liveness: Option<Liveness>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifetime: Option<Lifetime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<Consent>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

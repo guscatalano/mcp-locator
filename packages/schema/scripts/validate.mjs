@@ -26,7 +26,9 @@ for (const root of process.argv.slice(2)) {
     count++;
     let card;
     try {
-      card = JSON.parse(readFileSync(file, 'utf8'));
+      // A leading BOM is tolerated here for the same reason the parsers tolerate it:
+      // this check has to accept every card they would accept, or CI disagrees with runtime.
+      card = JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''));
     } catch (e) {
       // Fixture files exercising the malformed-json diagnostic are expected to fail parsing.
       if (basename(file).startsWith('malformed.')) continue;

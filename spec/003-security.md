@@ -61,6 +61,7 @@ the session. One record per server `name`:
     "state": "granted",              // granted | denied
     "grantedAt": "2026-08-15T17:02:11Z",
     "launchHash": "sha256:…",        // hash of the card's canonicalized `local.launch` + `endpoint`
+    "launchCommand": "…",            // the approved command line, for the stale diff
     "scope": "user"                  // "user" = all clients; "client" records add clientId
   }
 }
@@ -71,11 +72,25 @@ the session. One record per server `name`:
   changed"). This is the rule that stops a benign registered card from being silently swapped
   for `cmd.exe /c …` after consent was given. Version bumps that don't touch launch/endpoint do
   not invalidate consent.
+  `launchHash` proves *that* something changed; the stored `launchCommand` is what lets the
+  prompt say *what*, which is the difference between a question a user can answer and two
+  opaque digests.
 - Default scope is per-user ("allow for all AI clients"); the consent UI offers per-client
   restriction, recorded as `(clientId, name)` pairs. `clientId` is the client's package family
   name when it has package identity, else the signed publisher + exe path.
+  *(Implemented: per-user scope. Per-client scope is specified but not yet written by anything.)*
 - The consent UI is rendered by a broker helper process on the interactive desktop, never by the
   requesting AI client (a client rendering its own consent screen could trivially self-approve).
+  The helper is located next to the broker binary, never through `PATH`, and takes its answer
+  back as an exit code. Every string it displays comes from the card on disk or from the OS —
+  the requesting process is named by reading its PID, not by asking it — so a server cannot
+  supply text that makes it look official.
+- A prompt that is dismissed, times out, or cannot be shown is **not** a decision: nothing is
+  recorded and the activation fails. Only an explicit answer is stored, and a `denied` record is
+  never re-asked, because a prompt that reappears on every attempt teaches users to click
+  through it.
+- Prompts are serialized machine-wide. Two clients racing to activate the same server produce
+  one dialog: the second re-reads the store after the first finishes and finds the answer there.
 - `low`-tier and unsigned-binary cards get a visually distinct warning prompt.
 
 ## 5. Client-side integrity levels
@@ -86,6 +101,10 @@ AppContainer clients — *discovery* is open. Policy applies at activation:
 - Default policy: low-IL/AppContainer clients may activate only servers the user has already
   granted for that specific client (`scope: client`); the consent UI is never triggered *by* a
   low-trust client (prevents prompt-spam social engineering from sandboxed code).
+  *(Implemented: the broker reads the connecting process's token integrity level and refuses to
+  raise a prompt below Medium. An unreadable token is not treated as low integrity — a protected
+  or already-exited process reads the same way, and denying on ambiguity would break ordinary
+  clients to guard against a case the label cannot distinguish anyway.)*
 - The per-activation connection pipe is ACL'd to the requesting client's token, so one client's
   activated session cannot be hijacked by another process reading the same pipe name.
 
@@ -94,9 +113,31 @@ AppContainer clients — *discovery* is open. Policy applies at activation:
 - `system` tier: writable by Administrators only (standard `%ProgramData%` subdir with explicit
   ACL — note `%ProgramData%` default ACLs allow user-created files; the installer must set the
   restrictive ACL on the `servers` directory explicitly).
-- `low` tier: `AppData\LocalLow` carries the low-IL mandatory label by default; nothing to do.
-- State directory: broker-owned; on Windows the broker sets a deny-write ACE for the
-  low-integrity label so sandboxed processes cannot edit consent or runtime state.
+- `low` tier: `AppData\LocalLow` carries the low-IL mandatory label by default; the broker sets
+  it explicitly anyway, so the intent is legible rather than incidental.
+- State directory: broker-owned; on Windows the broker labels it Medium, so a low-integrity
+  process cannot edit consent or runtime state. This is what makes "sandboxed code may register
+  but never consent" true rather than merely intended.
+
+Applied by `mcp-locator-broker secure-dirs` (`--machine` for the system tier, which the MSI runs
+elevated; the per-user half runs on every `serve`). Keeping the rule in the broker rather than in
+the installer means it holds however a machine was set up, and can be re-run to check or repair
+one. The commands use well-known SIDs rather than account names, because `Administrators` and
+`Users` are localized and this has to work on a machine in any language.
+
+The resulting system-tier ACL, which is worth verifying after any install because the bootstrap
+rests on it:
+
+```
+NT AUTHORITY\SYSTEM:(OI)(CI)(F)
+BUILTIN\Administrators:(OI)(CI)(F)
+NT AUTHORITY\Authenticated Users:(OI)(CI)(RX)
+APPLICATION PACKAGE AUTHORITY\ALL APPLICATION PACKAGES:(OI)(CI)(RX)
+```
+
+Inheritance is cut (`/inheritance:r`). That is the load-bearing flag: `%ProgramData%` grants
+users the right to create things, so without cutting inheritance a directory beneath it can end
+up writable by exactly the account it is meant to be protected from.
 
 ## 7. Audit
 

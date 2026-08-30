@@ -13,7 +13,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test \"dist/test/**/*.test.js\""
+    "test": "node --test \"dist/test/**/*.test.js\"",
+    "bundle": "esbuild dist/src/index.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/bundle/mcp-locator-gateway.mjs --banner:js=\"import{createRequire as ___r}from'node:module';const require=___r(import.meta.url);\" && node scripts/stage-bundle.mjs"
   },
   "dependencies": {
     "@mcp-locator/client": "*",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.6.0"
   }
 }

@@ -1,0 +1,19 @@
+﻿{
+  "name": "com.example.bom",
+  "version": "1.0.0",
+  "title": "Byte Order Mark",
+  "description": "Written with a UTF-8 BOM, the way .NET and Windows PowerShell write text by default. Parsers must accept it.",
+  "local": {
+    "launch": {
+      "type": "stdio",
+      "command": "${FIXTURE_ROOT}/bin/present.exe",
+      "args": [
+        "--serve"
+      ]
+    },
+    "lifetime": {
+      "idleTimeoutSeconds": 300,
+      "shutdown": "graceful"
+    }
+  }
+}

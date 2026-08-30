@@ -6,14 +6,19 @@
   "type": "module",
   "main": "index.mjs",
   "exports": {
-    ".": "./index.mjs",
+    ".": {
+      "types": "./index.d.mts",
+      "default": "./index.mjs"
+    },
     "./schemas/v1/local-server-card.schema.json": "./schemas/v1/local-server-card.schema.json"
   },
   "files": [
     "index.mjs",
+    "index.d.mts",
     "schemas/"
   ],
   "dependencies": {
     "ajv": "^8.17.1"
-  }
+  },
+  "types": "index.d.mts"
 }

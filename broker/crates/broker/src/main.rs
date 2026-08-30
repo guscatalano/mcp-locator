@@ -1,16 +1,20 @@
 //! mcp-locator broker.
 //!
 //! Serves discovery and activation over a local pipe: clients enumerate registered servers,
-//! activate one (which starts it, refcounted, after a consent check), and release it. Consent
-//! is currently granted through this CLI rather than an interactive prompt — the Win32 consent
-//! dialog is the next piece. That makes `consent grant` a deliberate, auditable step rather
-//! than something an AI client can trigger on its own.
+//! activate one (which starts it, refcounted, after a consent check), and release it.
+//!
+//! Consent is asked for interactively: activating a server the user has not decided on raises
+//! the `mcp-locator-consent` dialog. The `consent` subcommands here are the out-of-band way to
+//! inspect, pre-approve, or revoke those decisions — useful for scripted setup and for undoing
+//! a click, but never something an AI client can reach.
 
 use mcp_locator_broker::activation::Engine;
 use mcp_locator_broker::audit::AuditLog;
 use mcp_locator_broker::catalog::{enumerate, EnumerateOptions};
 use mcp_locator_broker::consent::{ConsentScope, ConsentStore};
 use mcp_locator_broker::dirs::{self, resolve_roots, resolve_state_dir, Root, Tier};
+use mcp_locator_broker::install;
+use mcp_locator_broker::prompt::launch_summary;
 use mcp_locator_broker::server::{self, Broker};
 use std::path::PathBuf;
 
@@ -23,6 +27,7 @@ const USAGE: &str = "mcp-locator-broker — local MCP server discovery and activ
   mcp-locator-broker consent grant <name>
   mcp-locator-broker consent deny <name>
   mcp-locator-broker consent forget <name>
+  mcp-locator-broker secure-dirs [--machine]
 
 `consent grant` binds the approval to the card's current launch command. Editing that command
 afterwards invalidates the approval, and the server will refuse to start until it is re-granted.";
@@ -34,6 +39,9 @@ async fn main() -> std::io::Result<()> {
 
     match command {
         "serve" => {
+            // The per-user directories are created here rather than by the installer: the MSI
+            // runs once, as an administrator, and cannot know which users will ever log in.
+            report(&install::user());
             let state_dir = resolve_state_dir();
             let engine = Engine::new(ConsentStore::load(&state_dir), AuditLog::new(&state_dir))?;
             let endpoint = flag_value(&args, "--endpoint").unwrap_or_else(dirs::default_endpoint);
@@ -70,6 +78,24 @@ async fn main() -> std::io::Result<()> {
         }
 
         "consent" => consent_command(&args),
+
+        // Split machine/user because the two halves need different privileges. `--machine`
+        // touches ProgramData and must be elevated; without it only the current user's
+        // directories are created, which needs nothing special.
+        "secure-dirs" => {
+            let machine = args.iter().any(|a| a == "--machine");
+            let result = if machine {
+                install::machine()
+            } else {
+                install::user()
+            };
+            let failed = !result.failures.is_empty();
+            report(&result);
+            if failed {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
 
         "-h" | "--help" => {
             println!("{USAGE}");
@@ -121,9 +147,10 @@ fn consent_command(args: &[String]) -> std::io::Result<()> {
                 eprintln!("unknown server: {name}");
                 std::process::exit(1);
             };
-            store.grant(name, &entry.launch_hash, ConsentScope::User)?;
+            let command = launch_summary(entry);
+            store.grant(name, &entry.launch_hash, &command, ConsentScope::User)?;
             println!("granted {name}");
-            println!("  launch: {}", launch_summary(entry));
+            println!("  launch: {command}");
             println!("  bound to {}", entry.launch_hash);
         }
         "deny" => {
@@ -142,19 +169,14 @@ fn consent_command(args: &[String]) -> std::io::Result<()> {
     Ok(())
 }
 
-fn launch_summary(entry: &mcp_locator_broker::catalog::Entry) -> String {
-    match entry.card.local.as_ref().and_then(|l| l.launch.as_ref()) {
-        Some(launch) => {
-            let args = launch
-                .args
-                .as_ref()
-                .map(|a| a.join(" "))
-                .unwrap_or_default();
-            format!("{} {}", launch.command, args)
-                .trim_end()
-                .to_string()
-        }
-        None => "(endpoint only)".to_string(),
+/// Directory setup is reported on stderr so it stays out of anything parsing `list` output,
+/// and so the MSI log captures it.
+fn report(result: &install::Report) {
+    for step in &result.steps {
+        eprintln!("  {step}");
+    }
+    for failure in &result.failures {
+        eprintln!("  failed: {failure}");
     }
 }
 

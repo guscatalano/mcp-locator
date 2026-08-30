@@ -1,17 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { createRequire } from 'node:module';
+import * as ajvModule from 'ajv/dist/2020.js';
+import { localServerCardV1 as schema } from '@mcp-locator/schema';
 import type { Ajv2020, ErrorObject, Options } from 'ajv/dist/2020.js';
 import type { Diagnostic, ServerCard, Tier } from './types.js';
 import { expandEnv } from './expand.js';
 
-const require = createRequire(import.meta.url);
-const schema = require('@mcp-locator/schema/schemas/v1/local-server-card.schema.json');
-
 // ajv ships CJS; depending on loader the default export is the class or a { default } wrapper,
-// so resolve the constructor at runtime rather than relying on ESM interop.
-const ajvModule = require('ajv/dist/2020.js') as Record<string, unknown>;
-const AjvCtor = (ajvModule['default'] ?? ajvModule['Ajv2020'] ?? ajvModule) as new (opts?: Options) => Ajv2020;
+// so resolve the constructor from the namespace rather than relying on ESM interop. Both this
+// and the schema are static imports so the gateway can be bundled into a single file — a
+// `createRequire` call here would survive bundling as a runtime lookup that then fails.
+const ajvExports = ajvModule as unknown as Record<string, unknown>;
+const AjvCtor = (ajvExports['default'] ?? ajvExports['Ajv2020'] ?? ajvExports) as new (opts?: Options) => Ajv2020;
 const ajv = new AjvCtor({ allErrors: true, strict: false });
 // Deliberately not typed as a type guard: the failure branch still needs to read card.name
 // to attribute the diagnostic to a server.
@@ -41,7 +41,10 @@ export function parseCardFile(path: string, _tier: Tier, env: NodeJS.ProcessEnv 
 
   let card: ServerCard;
   try {
-    card = JSON.parse(text) as ServerCard;
+    // Strip a UTF-8 BOM. JSON forbids it, but .NET and Windows PowerShell write one by
+    // default, so cards authored with the tools Windows app developers actually reach for
+    // would otherwise be rejected as malformed for a reason invisible in an editor.
+    card = JSON.parse(text.replace(/^﻿/, '')) as ServerCard;
   } catch (e) {
     return { diagnostics: [{ code: 'malformed-json', path, message: (e as Error).message }] };
   }

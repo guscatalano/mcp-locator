@@ -1,0 +1,18 @@
+[package]
+name = "mcp-locator-consent"
+description = "Interactive consent prompt for the mcp-locator broker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mcp-locator-consent"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Controls",
+    "Win32_UI_WindowsAndMessaging",
+] }

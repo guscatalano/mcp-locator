@@ -6,4 +6,6 @@ pub mod audit;
 pub mod catalog;
 pub mod consent;
 pub mod dirs;
+pub mod install;
+pub mod prompt;
 pub mod server;

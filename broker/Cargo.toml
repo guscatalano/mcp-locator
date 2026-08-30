@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/proto", "crates/broker"]
+members = ["crates/proto", "crates/broker", "crates/consent-ui"]
 
 [workspace.package]
 version = "0.1.0"

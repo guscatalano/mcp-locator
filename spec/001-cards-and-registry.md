@@ -116,6 +116,14 @@ Environment-variable expansion is applied to `command`, `args`, `cwd`, `launch.e
 variables are left verbatim rather than expanded to empty — silently emptying a path would turn
 a typo into a launch of the wrong file.
 
+### File encoding
+
+Cards are UTF-8 JSON. A leading byte-order mark **must** be accepted and ignored, even though
+JSON forbids it: .NET and Windows PowerShell write one by default, so the tools a Windows app
+developer reaches for to author a card produce one without saying so, and the resulting failure
+is invisible in an editor. Every implementation strips it — `conformance/fixtures/basic/user/
+com.example.bom.card.json` is the shared proof.
+
 ## 4. Brokerless reads
 
 The client library exposes, without any broker:

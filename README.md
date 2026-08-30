@@ -73,6 +73,16 @@ tied to the client's PID. Deactivation is manual (`release`/`deactivate`) or saf
 idle timeout after the last grant is released, client PID death (the broker waits on the process
 handle, exactly as COM garbage-collects dead clients), or server PID death.
 
+## Install
+
+```powershell
+.\installer\build.ps1
+msiexec /i installer\dist\mcp-locator-0.1.0-x64.msi
+```
+
+Windows x64; the gateway needs Node 20.10+ on `PATH`. Full details, including how an app
+registers a server and how consent works, are in [INSTALL.md](INSTALL.md).
+
 ## Try it
 
 Configure **one** MCP server in your AI client, once:
@@ -83,7 +93,7 @@ Configure **one** MCP server in your AI client, once:
   "mcpServers": {
     "mcp-locator": {
       "command": "node",
-      "args": ["<repo>/packages/gateway/dist/src/index.js"]
+      "args": ["C:\\Program Files\\mcp-locator\\gateway\\mcp-locator-gateway.mjs"]
     }
   }
 }
@@ -100,17 +110,18 @@ activate com.example.notes
 tools after activation:  list_servers, activate, deactivate, notes.echo, notes.add
 ```
 
-To see the whole stack locally:
+Nothing needs to be running first: the gateway finds the broker's card in the system-tier
+directory and starts it. Activating a server the user has not decided on raises a dialog, which
+the AI cannot answer — approval is always a human click (or an out-of-band
+`mcp-locator-broker consent grant`).
+
+To see the whole stack from a source checkout:
 
 ```bash
 npm install && npm run build
 cargo build --manifest-path broker/Cargo.toml
 
-# register the demo server, approve it, start the broker
-#   (approval is a deliberate human step — an AI client cannot grant it)
-broker/target/debug/mcp-locator-broker consent grant com.example.notes
 broker/target/debug/mcp-locator-broker serve &
-
 node packages/gateway/scripts/e2e-full-stack.mjs com.example.notes
 ```
 
@@ -122,7 +133,9 @@ paths).
 
 1. **M1 — Cards + read-only library.** Card schema, directory layout, brokerless enumeration and
    liveness hints. Useful immediately; trivially cross-platform.
-2. **M2 — Broker.** Activation, consent UI, refcounted lifetime, authoritative state, bootstrap.
+2. **M2 — Broker.** ✔ Activation, consent dialog, refcounted lifetime, authoritative state,
+   bootstrap, and an MSI that installs all of it with the directory permissions the bootstrap
+   depends on. Signature verification of the broker binary is the remaining gap.
 3. **M3 — Gateway shim.** ✔ A thin MCP server (`list_servers` / `activate` / `deactivate`
    meta-tools, dynamic tool re-export with `tools/list_changed`) so unmodified AI clients get the
    full experience by configuring exactly one server, ever.
@@ -134,4 +147,5 @@ paths).
 - [spec/001-cards-and-registry.md](spec/001-cards-and-registry.md) — card format, directories, trust tiers, liveness
 - [spec/002-broker.md](spec/002-broker.md) — bootstrap, pipe protocol, activation lifecycle
 - [spec/003-security.md](spec/003-security.md) — threat model, consent binding, integrity levels
+- [INSTALL.md](INSTALL.md) — building, installing, registering a server, managing consent
 - [examples/](examples/) — sample cards

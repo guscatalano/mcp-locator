@@ -10,7 +10,9 @@
 
 use crate::activation::{ActivateError, Engine};
 use crate::catalog::{enumerate, Catalog, Entry, EnumerateOptions};
+use crate::consent::{ConsentScope, ConsentState};
 use crate::dirs::{resolve_roots, resolve_state_dir};
+use crate::prompt::{launch_summary, Decision, Prompter};
 use mcp_locator_proto::rpc::{
     HandshakeResult, Request, Response, ServerState, BROKER_PROTOCOL, INVALID_PARAMS,
     INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
@@ -32,13 +34,78 @@ static NEXT_CONNECTION: AtomicU64 = AtomicU64::new(0);
 
 pub struct Broker {
     pub engine: Mutex<Engine>,
+    prompter: Prompter,
+    /// Serializes consent dialogs. One prompt at a time is right on its own terms — stacked
+    /// dialogs are how users get trained to click through — and it also collapses a race: two
+    /// clients activating the same server produce one question, because whoever waits re-reads
+    /// the store and finds the answer already there.
+    prompt_lock: Mutex<()>,
 }
 
 impl Broker {
     pub fn new(engine: Engine) -> Arc<Self> {
         Arc::new(Self {
             engine: Mutex::new(engine),
+            prompter: Prompter::discover(),
+            prompt_lock: Mutex::new(()),
         })
+    }
+
+    /// Ask the user about `entry`, then record the answer. Returns the consent state as it
+    /// stands afterwards. The engine lock is never held across the dialog: a human takes
+    /// seconds at best, and the broker has to keep serving everyone else meanwhile.
+    async fn seek_consent(&self, entry: &Entry, client_pid: Option<u32>) -> ConsentState {
+        let _serialized = self.prompt_lock.lock().await;
+
+        // Re-read after taking the lock: another connection may have just asked the same
+        // question, and the user should not be shown it twice.
+        let record = {
+            let engine = self.engine.lock().await;
+            engine.consent.evaluate(&entry.name, &entry.launch_hash)
+        };
+        if !Prompter::should_ask(record.state) {
+            return record.state;
+        }
+
+        let decision = self.prompter.ask(entry, &record, client_pid).await;
+        let mut engine = self.engine.lock().await;
+        match decision {
+            Decision::Allow => {
+                let command = launch_summary(entry);
+                if engine
+                    .consent
+                    .grant(
+                        &entry.name,
+                        &entry.launch_hash,
+                        &command,
+                        ConsentScope::User,
+                    )
+                    .is_err()
+                {
+                    // A grant that could not be written must not be honoured in memory only,
+                    // or the answer silently evaporates on the next broker restart.
+                    return ConsentState::NotAsked;
+                }
+                engine
+                    .audit
+                    .record("consent-granted", &entry.name, client_pid, "prompt");
+                ConsentState::Granted
+            }
+            Decision::Deny => {
+                let _ = engine.consent.deny(&entry.name);
+                engine
+                    .audit
+                    .record("consent-denied", &entry.name, client_pid, "prompt");
+                ConsentState::Denied
+            }
+            // No answer is not a decision: nothing is stored, so the next activation asks again.
+            Decision::Unanswered => {
+                engine
+                    .audit
+                    .record("consent-unanswered", &entry.name, client_pid, "prompt");
+                record.state
+            }
+        }
     }
 }
 
@@ -178,6 +245,20 @@ pub async fn dispatch(
             let Some(entry) = find_entry(&name) else {
                 return Response::err(id, INVALID_PARAMS, format!("unknown server: {name}"));
             };
+
+            // Consent first, outside the engine lock, so a dialog waiting on a human does not
+            // stall every other client. `activate` re-checks it regardless — this only decides
+            // whether to ask, never whether to allow.
+            let state = {
+                let engine = broker.engine.lock().await;
+                engine
+                    .consent
+                    .evaluate(&entry.name, &entry.launch_hash)
+                    .state
+            };
+            if Prompter::should_ask(state) && broker.prompter.available() {
+                broker.seek_consent(&entry, client_pid).await;
+            }
 
             let mut engine = broker.engine.lock().await;
             match engine.activate(&entry, connection, client_pid).await {

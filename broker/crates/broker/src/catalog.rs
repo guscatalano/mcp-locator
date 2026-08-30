@@ -134,7 +134,10 @@ fn parse_card_file(
         name: None,
     })?;
 
-    let value: Value = serde_json::from_str(&text).map_err(|e| Diagnostic {
+    // Strip a UTF-8 BOM: see the matching note in parse.ts. The two parsers have to agree on
+    // what counts as a valid card, so this is not a place to be stricter than the other.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let value: Value = serde_json::from_str(text).map_err(|e| Diagnostic {
         code: DiagnosticCode::MalformedJson,
         path: path.to_path_buf(),
         message: e.to_string(),

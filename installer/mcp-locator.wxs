@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The mcp-locator installer.
+
+  It puts three things on the machine, and the choice of where matters more than what:
+
+  * The broker and the consent helper go under Program Files. That directory is writable only
+    by administrators, and the client library refuses to launch a broker from anywhere else
+    (spec/003 §3) — so "installed by an administrator" is what the bootstrap trusts, and the
+    install location is the enforcement point rather than a convention.
+  * The broker's own card goes in the system-tier registry directory, which is how any client
+    library discovers that a broker exists at all without being told.
+  * The gateway ships as a single bundled .mjs so one line of AI-client config reaches every
+    server on the machine. It needs Node on PATH; nothing else does.
+
+  Directory permissions are applied by the broker's own secure-dirs command rather than
+  declared here, so the same rule applies whether a machine was set up by this MSI, by a
+  future package format, or by hand.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="mcp-locator"
+      Manufacturer="mcp-locator"
+      Version="$(var.Version)"
+      UpgradeCode="8b1f0c2e-5a7d-4f3b-9c21-6d4e8a0b7f15"
+      Scope="perMachine"
+      Compressed="yes"
+      InstallerVersion="500">
+
+    <SummaryInformation Description="Local discovery and activation for MCP servers" />
+
+    <!-- Upgrades replace in place: two brokers racing for the same pipe is a failure mode
+         worth designing out of the install path entirely. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of mcp-locator is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="Main" Title="mcp-locator" Level="1">
+      <ComponentGroupRef Id="Binaries" />
+      <ComponentGroupRef Id="GatewayFiles" />
+      <ComponentGroupRef Id="SystemRegistry" />
+    </Feature>
+
+    <!-- The ACLs land after the files, because the card is written into the same directory
+         the custom action then locks down. Return="check" is deliberate: an install that
+         could not secure the system-tier directory has not delivered the property the
+         bootstrap depends on, so it should fail loudly rather than look successful. -->
+    <CustomAction
+        Id="SecureDirectories"
+        Directory="INSTALLFOLDER"
+        ExeCommand="&quot;[INSTALLFOLDER]mcp-locator-broker.exe&quot; secure-dirs --machine"
+        Execute="deferred"
+        Impersonate="no"
+        Return="check" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SecureDirectories" After="InstallFiles" Condition="NOT REMOVE" />
+    </InstallExecuteSequence>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="mcp-locator">
+        <Directory Id="GatewayFolder" Name="gateway" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DataFolder" Name="mcp-locator">
+        <Directory Id="SystemTierFolder" Name="servers" />
+      </Directory>
+    </StandardDirectory>
+
+    <ComponentGroup Id="Binaries" Directory="INSTALLFOLDER">
+      <Component>
+        <File Id="Broker" Source="$(var.StageDir)\mcp-locator-broker.exe" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Id="ConsentUi" Source="$(var.StageDir)\mcp-locator-consent.exe" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Id="License" Source="$(var.StageDir)\LICENSE" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="GatewayFiles" Directory="GatewayFolder">
+      <Files Include="$(var.StageDir)\gateway\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="SystemRegistry" Directory="SystemTierFolder">
+      <Component>
+        <File Id="BrokerCard" Source="$(var.StageDir)\io.mcplocator.broker.card.json" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

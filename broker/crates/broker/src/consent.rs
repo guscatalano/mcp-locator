@@ -36,6 +36,10 @@ pub struct ConsentRecord {
     pub granted_at: Option<String>,
     #[serde(rename = "launchHash", skip_serializing_if = "Option::is_none")]
     pub launch_hash: Option<String>,
+    /// The approved command line, kept so a later change can be shown to the user as a
+    /// before/after. The hash alone proves something changed but cannot say what.
+    #[serde(rename = "launchCommand", skip_serializing_if = "Option::is_none")]
+    pub launch_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<ConsentScope>,
 }
@@ -46,6 +50,7 @@ impl ConsentRecord {
             state: ConsentState::NotAsked,
             granted_at: None,
             launch_hash: None,
+            launch_command: None,
             scope: None,
         }
     }
@@ -91,6 +96,7 @@ impl ConsentStore {
         &mut self,
         name: &str,
         launch_hash: &str,
+        launch_command: &str,
         scope: ConsentScope,
     ) -> std::io::Result<()> {
         self.put(
@@ -99,6 +105,7 @@ impl ConsentStore {
                 state: ConsentState::Granted,
                 granted_at: Some(rfc3339_now()),
                 launch_hash: Some(launch_hash.to_string()),
+                launch_command: Some(launch_command.to_string()),
                 scope: Some(scope),
             },
         )
@@ -111,6 +118,7 @@ impl ConsentStore {
                 state: ConsentState::Denied,
                 granted_at: Some(rfc3339_now()),
                 launch_hash: None,
+                launch_command: None,
                 scope: None,
             },
         )
@@ -191,8 +199,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mcp-locator-consent-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut s = store(&dir);
-        s.grant("com.example.app", "sha256:aaa", ConsentScope::User)
-            .unwrap();
+        s.grant(
+            "com.example.app",
+            "sha256:aaa",
+            "notes.exe --serve",
+            ConsentScope::User,
+        )
+        .unwrap();
         assert_eq!(
             s.evaluate("com.example.app", "sha256:aaa").state,
             ConsentState::Granted

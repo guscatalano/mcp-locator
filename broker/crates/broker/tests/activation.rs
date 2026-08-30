@@ -78,7 +78,12 @@ impl Fixture {
     fn granted_engine(&self, name: &str) -> Engine {
         let mut store = ConsentStore::load(&self.state_dir());
         store
-            .grant(name, &self.entry(name).launch_hash, ConsentScope::User)
+            .grant(
+                name,
+                &self.entry(name).launch_hash,
+                "test",
+                ConsentScope::User,
+            )
             .unwrap();
         Engine::new(store, AuditLog::disabled()).unwrap()
     }

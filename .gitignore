@@ -4,3 +4,7 @@ coverage/
 *.tsbuildinfo
 target/
 .DS_Store
+
+# Installer build output
+installer/stage/
+installer/dist/

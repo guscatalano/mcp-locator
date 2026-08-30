@@ -44,3 +44,27 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       # Includes the cross-language check that the Rust and TypeScript launch hashes agree.
       - run: cargo test
+
+  # Builds the MSI on every push. An installer that only builds on the maintainer's machine is
+  # an installer nobody can reproduce, and the WiX authoring breaks in ways the other jobs
+  # cannot see (a stray `--` in a comment took one build down).
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: broker
+      - run: dotnet tool install --global wix --version 5.0.2
+      - run: npm ci
+      - run: ./installer/build.ps1
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-locator-msi
+          path: installer/dist/*.msi

@@ -9,7 +9,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { BrokerClient, BrokerError, type BrokerServer } from '@mcp-locator/client';
+import { BROKER_CARD, BrokerClient, BrokerError, type BrokerServer } from '@mcp-locator/client';
 import { SocketClientTransport } from './socketTransport.js';
 
 /** Separates the server's short name from the tool's own name: `notes.search`. */
@@ -128,7 +128,12 @@ export class Gateway {
     const broker = await this.#brokerClient();
     const servers = await broker.list(includeOrphaned);
 
-    const rows = servers.map((server: BrokerServer) => ({
+    const rows = servers
+      // The broker registers itself as a card so client libraries can find and start it. It is
+      // not an MCP server, so offering it here would put a tool in front of the model whose
+      // only possible outcome is a failed handshake.
+      .filter((server: BrokerServer) => server.name !== BROKER_CARD)
+      .map((server: BrokerServer) => ({
       name: server.name,
       title: server.title,
       description: server.description,

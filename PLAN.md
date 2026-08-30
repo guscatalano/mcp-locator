@@ -79,26 +79,34 @@ Build order chosen so each step is testable against the previous:
    grace → kill), `deactivate`/`force` naming its holders, and the registered/running/idle
    transitions. Still open: server-crash detection and the `runtime.json` snapshot +
    reconcile-on-start.
-5. **Consent** — *store done, UI open*: `consent.json` writer with atomic replace, `launchHash`
-   binding with stale detection, and enforcement at activation. Approval is currently given via
-   `mcp-locator-broker consent grant`, which deliberately keeps it a human CLI step no AI client
-   can trigger. Still open: the Win32 TaskDialog helper (name, publisher/signature status, tier
-   badge, consent summary; allow / allow-for-this-client / deny) and the stale re-prompt diff.
-6. **Bootstrap hardening**: singleton named mutex; self-check that own path is under install
-   root; `WinVerifyTrust` verification helper used by both the TS library (via CLI subcommand
-   `mcp-locator verify-broker`) and `admin/supersede`; drain/handover.
-   Dev mode: `MCP_LOCATOR_DEV=1` skips signature checks with a loud stderr warning — needed
-   until there's a signing cert (see Risks).
+5. **Consent** — *done*: `consent.json` writer with atomic replace, `launchHash` binding with
+   stale detection, enforcement at activation, and the Win32 TaskDialog helper
+   (`crates/consent-ui`) showing the server, its launch command, the card's origin and tier, and
+   the requesting process — the last read from the PID rather than self-reported. Activation
+   raises it; the answer comes back as an exit code, so nothing a client sends reaches the
+   dialog. Stale approvals re-prompt with the old and new commands side by side, which is why
+   the record now stores `launchCommand` next to the hash. Prompts are serialized machine-wide
+   and low-integrity clients cannot raise one at all.
+   Still open: allow-for-this-client scope (`ConsentScope::Client` exists but nothing writes it).
+6. **Bootstrap hardening** — *partly done*: the MSI puts the broker under `%ProgramFiles%` and
+   the client library refuses to launch one from anywhere else, so path containment is real and
+   enforced. Still open: the singleton named mutex, `WinVerifyTrust` verification used by both
+   the TS library and `admin/supersede`, drain/handover, and the `MCP_LOCATOR_DEV=1` escape
+   hatch that goes with them. Signature checking is the one gate that needs a certificate
+   bought before it can mean anything (see Risks).
 7. **TS library integration**: broker client in `@mcp-locator/client` — connect, launch-on-demand
    bootstrap, `activate`/`release`/`deactivate`, subscriptions; single public API that degrades
    from broker to brokerless transparently (`status` vs `probablyRunning` stay distinct).
 8. **Audit log** (append-only JSON lines) + `odr`-style CLI additions: `mcp-locator activate/
    deactivate/status` against the live broker.
-9. **Installer**: WiX MSI — broker + consent helper to `%ProgramFiles%\mcp-locator\`, write the
-   broker system card, create tier dirs with the spec/003 §6 ACLs (explicit restrictive ACL on
-   the ProgramData `servers` dir, deny-low-IL ACE on the state dir).
+9. **Installer** — *done*: WiX v5 MSI (`installer/`) installing the broker, consent helper, and
+   the bundled gateway to `%ProgramFiles%\mcp-locator\`, generating and placing the broker's
+   system-tier card, and applying the spec/003 §6 permissions. Those are applied by
+   `mcp-locator-broker secure-dirs` rather than declared in the MSI, so the same rule holds
+   however a machine was set up; the per-user half runs on every `serve`. CI builds the MSI on
+   windows-latest and uploads it. Unsigned until there is a certificate.
 
-Exit (the demo that proves the model): two separate client processes activate `com.example.notes`;
+Exit (the demo that proves the model) — *met*: two separate client processes activate `com.example.notes`;
 refcount holds one server; killing client A releases its grant; client B keeps working; closing B
 starts the idle timer; server exits gracefully; consent was prompted exactly once; audit log shows
 all of it.
@@ -112,14 +120,21 @@ release; 9 can trail.
    their original JSON Schemas, and `registerTool` takes Zod shapes.
 2. ✔ On activate: MCP client session over the granted relay (custom socket transport, since the
    broker hands out an address rather than a child process), tools re-exported as
-   `<alias>.<tool>`, `notifications/tools/list_changed` emitted. Resources and prompts still to
-   mirror.
+   `<alias>.<tool>`, `notifications/tools/list_changed` emitted. The broker's own card is
+   filtered out of `list_servers`: it is registered so libraries can start it, not so a model
+   can try to speak MCP to it. Resources and prompts still to mirror.
 3. ✔ Release-on-exit, plus release-on-failed-handshake so a server that starts but does not
    speak MCP cannot leave a dangling grant.
 4. ✔ Broker client in `@mcp-locator/client` (`BrokerClient`), with the spec/003 §3 bootstrap
    rules enforced: system-tier card only, command must resolve inside the install root.
    Signature verification still to come.
-5. ✔ Onboarding docs in the README. Still open: a demo recording with a real AI client.
+5. ✔ Onboarding docs in the README and INSTALL.md. Still open: a demo recording with a real
+   AI client.
+
+The gateway ships as a single bundled `.mjs` (esbuild) so the MSI can install it without a
+`node_modules` tree. That required the client library's two `createRequire` calls to become
+static imports — a bundler cannot follow a runtime `require`, and the failure would have been a
+gateway that worked from a checkout and not from an install.
 
 Exit criterion met end to end: a real MCP client sees only the three meta-tools, discovers the
 demo server, activates it, watches `notes.echo` / `notes.add` appear mid-session, calls one and
