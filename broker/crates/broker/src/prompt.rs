@@ -294,10 +294,22 @@ mod platform {
         false
     }
 
+    /// Name of the running image, from the OS rather than from anything the client claimed.
+    ///
+    /// Linux has `/proc`; macOS and the BSDs need `proc_pidpath` or a `sysctl`, which is FFI
+    /// this crate does not otherwise carry. Returning `None` there is not a stub in disguise —
+    /// the caller omits the "requested by" line entirely rather than guessing, and no unix
+    /// platform has an interactive prompt yet, so the line has nowhere to appear until the
+    /// port that would supply a real implementation anyway.
     pub fn process_name(pid: u32) -> Option<String> {
-        std::fs::read_to_string(format!("/proc/{pid}/comm"))
-            .ok()
-            .map(|name| name.trim().to_string())
+        if cfg!(target_os = "linux") {
+            std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .ok()
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty())
+        } else {
+            None
+        }
     }
 }
 
@@ -330,6 +342,13 @@ mod tests {
     #[test]
     fn the_running_image_can_be_named() {
         let name = platform::process_name(std::process::id());
-        assert!(name.is_some_and(|n| !n.is_empty()));
+        if cfg!(windows) || cfg!(target_os = "linux") {
+            assert!(name.is_some_and(|n| !n.is_empty()));
+        } else {
+            // Asserting `None` rather than skipping: the caller drops the "requested by" line
+            // when there is no name, and a half-working lookup that returned an empty string
+            // would put a blank attribution in a security prompt.
+            assert_eq!(name, None);
+        }
     }
 }

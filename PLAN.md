@@ -160,7 +160,9 @@ reaches the child process, then deactivates and watches them disappear.
   Windows-only `cargo clippy` cannot see the other half — code reachable only from the Windows
   module reads as dead on unix. Catch it locally with
   `cargo clippy --all-targets --target x86_64-unknown-linux-gnu -- -D warnings`
-  (`rustup target add` once; no linker needed, since clippy does not link).
+  and the same for `x86_64-apple-darwin` (`rustup target add` once; no linker needed, since
+  clippy does not link). Note the limits: this catches compile and lint failures, not runtime
+  ones. `/proc` exists on Linux and not on macOS, and only CI running the tests found that.
 - **Security gates**: spec/003 checklist review before the first binary release; fuzz the card
   parser and the pipe framing (cheap, high value — both parse attacker-controlled input).
 
