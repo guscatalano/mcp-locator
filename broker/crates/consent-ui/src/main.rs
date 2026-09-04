@@ -193,7 +193,9 @@ mod dialog {
         TDF_EXPAND_FOOTER_AREA, TDF_USE_COMMAND_LINKS, TDN_CREATED, TD_SHIELD_ICON,
         TD_WARNING_ICON,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetForegroundWindow, SetWindowPos, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE,
+    };
 
     const ID_ALLOW: i32 = 101;
     const ID_DENY: i32 = 102;
@@ -202,9 +204,17 @@ mod dialog {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    /// Brings the prompt to the front. The broker is a background process, so without this the
-    /// dialog can open behind whatever the user is looking at, and a consent prompt nobody sees
-    /// is worse than none: it stalls the client with no visible reason.
+    /// Brings the prompt to the front and keeps it there.
+    ///
+    /// `SetForegroundWindow` alone is not enough and was observed failing on a clean machine:
+    /// Windows only grants the foreground to a process that already has it or was handed it, and
+    /// the broker is a background service that has neither. The dialog opened *behind* the AI
+    /// client that triggered it, where it blocked that client for the full prompt timeout with
+    /// nothing on screen to explain why.
+    ///
+    /// Topmost is the right answer for this particular window rather than a trick: it is a modal
+    /// security question that a person has to answer before anything proceeds, which is the same
+    /// reason the UAC prompt does not sit politely in the z-order either.
     unsafe extern "system" fn callback(
         hwnd: HWND,
         notification: u32,
@@ -213,7 +223,11 @@ mod dialog {
         _data: isize,
     ) -> windows_sys::core::HRESULT {
         if notification == TDN_CREATED as u32 {
-            unsafe { SetForegroundWindow(hwnd) };
+            // SAFETY: `hwnd` is the live dialog, passed in by the task dialog itself.
+            unsafe {
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                SetForegroundWindow(hwnd);
+            }
         }
         0
     }

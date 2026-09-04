@@ -27,8 +27,15 @@ $stage = Join-Path $PSScriptRoot 'stage'
 $out = Join-Path $PSScriptRoot 'dist'
 
 Write-Host '==> Rust binaries (release)' -ForegroundColor Cyan
-& cargo build --release --manifest-path (Join-Path $repo 'broker\Cargo.toml')
-if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+# Build from inside broker/ rather than with --manifest-path: cargo discovers .cargo/config.toml
+# relative to the working directory, so building from the repo root silently drops the static-CRT
+# rustflags there and produces binaries that need the VC++ redistributable at runtime.
+Push-Location (Join-Path $repo 'broker')
+try {
+    & cargo build --release
+    if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+}
+finally { Pop-Location }
 
 Write-Host '==> TypeScript build and gateway bundle' -ForegroundColor Cyan
 Push-Location $repo
@@ -78,6 +85,18 @@ $card = [ordered]@{
         }
     }
 }
+# A stock Windows install has no VC++ redistributable, and a binary that needs it fails as an
+# opaque 1603 with nothing named. Both ways this has broken were silent — the dynamic default on
+# a dev box that happens to have the DLL, and cargo not seeing .cargo/config.toml when built from
+# the wrong directory — so assert on the artefact rather than trusting the build flags.
+foreach ($exe in 'mcp-locator-broker.exe', 'mcp-locator-consent.exe') {
+    $path = Join-Path $stage $exe
+    $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($path))
+    if ($text -match 'VCRUNTIME140') {
+        throw "$exe imports VCRUNTIME140: the MSVC runtime is linked dynamically and this will not start on a clean Windows install."
+    }
+}
+
 $cardPath = Join-Path $stage 'io.mcplocator.broker.card.json'
 # WriteAllText rather than Set-Content: Windows PowerShell's utf8 encoding emits a BOM, and a
 # card is read by parsers in several languages that have no reason to expect one.

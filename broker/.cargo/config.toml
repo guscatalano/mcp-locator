@@ -1,0 +1,14 @@
+# Link the MSVC runtime statically on Windows.
+#
+# A stock Windows 11 install has no `VCRUNTIME140.dll` — the Visual C++ redistributable arrives
+# with developer tools or with some other application, so a machine that happens to have it makes
+# the dynamic default look fine right up until you install somewhere clean. The failure is also
+# opaque: the process never starts, and the installer reports `STATUS_DLL_NOT_FOUND` as a generic
+# 1603, naming nothing.
+#
+# Static linking costs a few hundred KB per binary and removes the prerequisite entirely, which
+# is the right trade for two small executables that must run on a machine nobody prepared. The
+# alternative — chaining the redistributable into the MSI — makes the installer bigger, slower,
+# and able to fail in more ways.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -30,8 +30,15 @@
     <SummaryInformation Description="Local discovery and activation for MCP servers" />
 
     <!-- Upgrades replace in place: two brokers racing for the same pipe is a failure mode
-         worth designing out of the install path entirely. -->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of mcp-locator is already installed." />
+         worth designing out of the install path entirely.
+
+         AllowSameVersionUpgrades because without it, installing a rebuild of the same version
+         is a silent no-op that still exits 0 — the files on disk stay as they were while the
+         install reports success. That is a bad way to find out your fix did not ship, and it
+         also makes "repair by reinstalling" do nothing. -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of mcp-locator is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Feature Id="Main" Title="mcp-locator" Level="1">

@@ -166,6 +166,25 @@ reaches the child process, then deactivates and watches them disappear.
 - **Security gates**: spec/003 checklist review before the first binary release; fuzz the card
   parser and the pipe framing (cheap, high value — both parse attacker-controlled input).
 
+## Verified on a clean machine
+
+M2 hardening was signed off against a disposable Windows 11 VM with nothing on it — no Node, no
+VC++ runtime, no developer tools. Four bugs surfaced there that no amount of testing on a
+developer's machine could have found, because each one is masked by something a dev box already
+has:
+
+| Symptom on a clean machine | Cause | Fix |
+|---|---|---|
+| MSI fails with 1603, naming nothing | broker linked the MSVC runtime dynamically; stock Windows has no `VCRUNTIME140.dll` | static CRT (`broker/.cargo/config.toml`), asserted on the artefact in `build.ps1` |
+| static CRT silently not applied | cargo reads `.cargo/config.toml` relative to the **working directory**, not `--manifest-path` | `build.ps1` builds from inside `broker/` |
+| consent dialog opened *behind* the client | `SetForegroundWindow` cannot take the foreground from a background service | dialog sets itself topmost, as a modal security prompt should |
+| reinstalling a rebuild changed nothing, exit 0 | WiX assigns a new ProductCode per build; `MajorUpgrade` refuses an unchanged version | `AllowSameVersionUpgrades="yes"` |
+
+Keep the loop: build the MSI, install it on a fresh sandbox, and run the end-to-end check there
+before calling a release done. The check must assert rather than print — the gateway reports
+refusals as tool *content*, so a script that only catches thrown errors passes a run in which
+nothing worked.
+
 ## Risks
 
 | Risk | Mitigation |
