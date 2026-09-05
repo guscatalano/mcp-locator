@@ -384,14 +384,34 @@ pub fn state_dir() -> std::path::PathBuf {
 
 #[cfg(windows)]
 pub async fn listen(broker: Arc<Broker>, endpoint: &str) -> std::io::Result<()> {
+    use crate::security::{broker_pipe_sddl, SecurityAttributes};
     use tokio::net::windows::named_pipe::ServerOptions;
 
-    // NOTE (spec/003 §5): default pipe security descriptor for now. Explicit SDDL — user SID
-    // plus a connect-only ACE for low integrity — lands with the hardening step.
+    // Explicit descriptor (spec/003 §5): this user, SYSTEM and administrators, with the
+    // mandatory label lowered so sandboxed clients in the session can connect. Under the
+    // default descriptor the pipe inherits the broker's own integrity level and low-integrity
+    // clients are refused before the DACL is even read, which would make discovery — the one
+    // thing spec/003 says is open to them — impossible.
+    let sddl = broker_pipe_sddl();
+    if sddl.is_none() {
+        eprintln!("warning: could not build a pipe descriptor; falling back to the default");
+    }
+    let create =
+        |first: bool| -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+            let mut options = ServerOptions::new();
+            options.first_pipe_instance(first);
+            match sddl.as_deref().and_then(SecurityAttributes::from_sddl) {
+                // SAFETY: the attributes outlive the call; `create_with_security_attributes_raw`
+                // copies what it needs before returning.
+                Some(mut attributes) => unsafe {
+                    options.create_with_security_attributes_raw(endpoint, attributes.as_ptr())
+                },
+                None => options.create(endpoint),
+            }
+        };
+
     eprintln!("mcp-locator broker listening on {endpoint}");
-    let mut server = ServerOptions::new()
-        .first_pipe_instance(true)
-        .create(endpoint)?;
+    let mut server = create(true)?;
     spawn_idle_reaper(Arc::clone(&broker));
 
     loop {
@@ -399,7 +419,7 @@ pub async fn listen(broker: Arc<Broker>, endpoint: &str) -> std::io::Result<()> 
         let connected = server;
         // Create the next instance before handling this one, or a client connecting during
         // request handling would get ERROR_PIPE_BUSY.
-        server = ServerOptions::new().create(endpoint)?;
+        server = create(false)?;
 
         let client_pid = crate::activation::peer_pid(&connected);
         let broker = Arc::clone(&broker);

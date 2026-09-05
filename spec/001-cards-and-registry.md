@@ -116,6 +116,19 @@ Environment-variable expansion is applied to `command`, `args`, `cwd`, `launch.e
 variables are left verbatim rather than expanded to empty — silently emptying a path would turn
 a typo into a launch of the wrong file.
 
+### Resolving `launch.command`
+
+A command containing a path separator is a path and is checked as one. Anything else is a bare
+name, resolved through `PATH` (and `PATHEXT` on Windows) exactly as the OS would resolve it at
+launch. A card may therefore say `"command": "node"`, which is more portable than hard-coding an
+interpreter path that differs on every machine.
+
+The distinction is load-bearing in both directions. Treating a bare name as a missing file hides
+a perfectly runnable server as an orphan, with no diagnostic to explain the disappearance.
+Searching `PATH` for something written *as* a path is worse: a missing `./tools/notes.exe` could
+be quietly satisfied by an unrelated `notes.exe` earlier on `PATH` — the wrong program, launched
+under a name the user has already approved.
+
 ### File encoding
 
 Cards are UTF-8 JSON. A leading byte-order mark **must** be accepted and ignored, even though

@@ -1,5 +1,6 @@
 {
   "entries": [
+    { "name": "com.example.barecommand", "tier": "user", "version": "1.2.0", "orphaned": true, "shadowedTiers": [], "command": "mcp-locator-definitely-not-installed" },
     { "name": "com.example.bom", "tier": "user", "version": "1.0.0", "orphaned": false, "shadowedTiers": [], "command": "bin/present.exe" },
     { "name": "com.example.endpointonly", "tier": "user", "version": "3.1.0", "orphaned": false, "shadowedTiers": [], "command": null },
     { "name": "com.example.lowtrust", "tier": "low", "version": "0.1.0", "orphaned": false, "shadowedTiers": [], "command": "bin/present.exe" },

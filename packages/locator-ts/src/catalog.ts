@@ -1,8 +1,9 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Catalog, CatalogEntry, Diagnostic, Root, Tier } from './types.js';
 import { TIER_RANK } from './types.js';
 import { CARD_SUFFIX, parseCardFile } from './parse.js';
+import { resolveCommand } from './command.js';
 import { resolveRoots } from './dirs.js';
 
 export interface EnumerateOptions {
@@ -53,7 +54,7 @@ export function enumerate(options: EnumerateOptions = {}): Catalog {
         raw: result.card,
         path: file,
         tier: root.tier,
-        orphaned: isOrphaned(result.expanded),
+        orphaned: isOrphaned(result.expanded, env, options.platform ?? process.platform),
         shadowed: [],
       });
     }
@@ -66,10 +67,14 @@ export function enumerate(options: EnumerateOptions = {}): Catalog {
 }
 
 /** A card whose launch binary has vanished — typically a failed uninstall (spec/001 §5). */
-function isOrphaned(card: { local?: { launch?: { command: string } } }): boolean {
+function isOrphaned(
+  card: { local?: { launch?: { command: string } } },
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): boolean {
   const command = card.local?.launch?.command;
   if (!command) return false;
-  return !existsSync(command);
+  return resolveCommand(command, env, platform) === undefined;
 }
 
 function cardFilesIn(dir: string): string[] {

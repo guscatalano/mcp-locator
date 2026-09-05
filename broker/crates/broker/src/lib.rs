@@ -8,4 +8,5 @@ pub mod consent;
 pub mod dirs;
 pub mod install;
 pub mod prompt;
+pub mod security;
 pub mod server;

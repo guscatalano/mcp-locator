@@ -108,6 +108,28 @@ AppContainer clients — *discovery* is open. Policy applies at activation:
 - The per-activation connection pipe is ACL'd to the requesting client's token, so one client's
   activated session cannot be hijacked by another process reading the same pipe name.
 
+*(Implemented.)* Both pipes carry an explicit descriptor, and the two answer opposite questions:
+
+| Pipe | DACL | Mandatory label |
+|---|---|---|
+| broker `\.\pipe\mcp-locatorroker1` | this user, SYSTEM, Administrators | **Low** |
+| relay `…\conn\<grantId>` | this user only | the **client's own** level |
+
+The broker pipe's label has to be lowered deliberately. A pipe created with the default
+descriptor inherits its creator's integrity level, and the mandatory policy then refuses
+low-integrity clients before the DACL is consulted at all — which would make discovery, the one
+thing this section says is open to sandboxes, impossible.
+
+The relay pipes go the other way: each carries one client's live session, so labelling it at
+that client's level is what stops a lower-integrity process on the same account from writing to
+a grant it does not hold. Administrators are deliberately absent from a relay DACL — an
+administrator can take ownership regardless, so granting it buys nothing and only makes the
+descriptor a less honest statement of who the pipe is for.
+
+If a descriptor cannot be built the code falls back to the platform default, which carries the
+broker's own label: tighter than what was asked for, never looser. On unix the relay socket is
+chmod 0600, since there are no integrity levels and the umask is not a guarantee.
+
 ## 6. Registry directory ACLs
 
 - `system` tier: writable by Administrators only (standard `%ProgramData%` subdir with explicit

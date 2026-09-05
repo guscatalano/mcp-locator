@@ -172,6 +172,12 @@ pub fn launch_summary(entry: &Entry) -> String {
     }
 }
 
+/// Whether a process is running below Medium integrity — a sandbox. Exposed because the
+/// activation engine needs it too, to label a grant's relay pipe at the client's own level.
+pub fn is_low_integrity(pid: u32) -> bool {
+    platform::is_low_integrity(pid)
+}
+
 fn describe_client(pid: u32) -> Option<String> {
     platform::process_name(pid).map(|name| format!("{name} (pid {pid})"))
 }

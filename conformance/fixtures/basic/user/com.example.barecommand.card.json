@@ -1,0 +1,17 @@
+{
+  "name": "com.example.barecommand",
+  "version": "1.2.0",
+  "title": "Bare Command",
+  "description": "Launch command is a bare name rather than a path, so it must be resolved through PATH. This one is on no PATH, so it is an orphan.",
+  "local": {
+    "launch": {
+      "type": "stdio",
+      "command": "mcp-locator-definitely-not-installed",
+      "args": []
+    },
+    "lifetime": {
+      "idleTimeoutSeconds": 60,
+      "shutdown": "graceful"
+    }
+  }
+}

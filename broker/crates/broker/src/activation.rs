@@ -166,7 +166,12 @@ impl Engine {
         );
 
         let (kind, connection_info) = match launch.launch_type {
-            LaunchType::Stdio => self.start_stdio(entry, &grant_id).await?,
+            LaunchType::Stdio => {
+                // The relay is labelled at the requesting client's integrity level, so this has
+                // to be read from the connection's PID rather than assumed.
+                let low = client_pid.is_some_and(crate::prompt::is_low_integrity);
+                self.start_stdio(entry, &grant_id, low).await?
+            }
             LaunchType::Executable => self.attach_shared(entry).await?,
         };
 
@@ -193,8 +198,10 @@ impl Engine {
         &mut self,
         entry: &Entry,
         grant_id: &str,
+        client_is_low_integrity: bool,
     ) -> Result<(GrantKind, ConnectionInfo), ActivateError> {
-        let listener = platform::RelayListener::create(grant_id).map_err(ActivateError::Io)?;
+        let listener = platform::RelayListener::create(grant_id, client_is_low_integrity)
+            .map_err(ActivateError::Io)?;
         let address = listener.address();
 
         let mut child = self.spawn(entry, true)?;
@@ -556,11 +563,27 @@ mod platform {
     }
 
     impl RelayListener {
-        pub fn create(grant_id: &str) -> std::io::Result<Self> {
+        pub fn create(grant_id: &str, client_is_low_integrity: bool) -> std::io::Result<Self> {
+            use crate::security::{relay_pipe_sddl, SecurityAttributes};
+
             let address = format!(r"\\.\pipe\mcp-locator\conn\{grant_id}");
-            let server = ServerOptions::new()
-                .first_pipe_instance(true)
-                .create(&address)?;
+            let mut options = ServerOptions::new();
+            options.first_pipe_instance(true);
+
+            // Labelled at the requesting client's own integrity level, so nothing below it can
+            // write to this grant's pipe and hijack the session (spec/003 §5). If the descriptor
+            // cannot be built we fall back to the default, which carries the broker's own label
+            // — tighter than what we asked for rather than looser, so continuing is safe.
+            let server = match relay_pipe_sddl(client_is_low_integrity)
+                .as_deref()
+                .and_then(SecurityAttributes::from_sddl)
+            {
+                // SAFETY: the attributes outlive the call.
+                Some(mut attributes) => unsafe {
+                    options.create_with_security_attributes_raw(&address, attributes.as_ptr())?
+                },
+                None => options.create(&address)?,
+            };
             Ok(Self { server, address })
         }
 
@@ -599,11 +622,17 @@ mod platform {
     }
 
     impl RelayListener {
-        pub fn create(grant_id: &str) -> std::io::Result<Self> {
+        pub fn create(grant_id: &str, _client_is_low_integrity: bool) -> std::io::Result<Self> {
             let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
             let path = PathBuf::from(dir).join(format!("mcp-locator-conn-{grant_id}.sock"));
             let _ = std::fs::remove_file(&path);
             let listener = UnixListener::bind(&path)?;
+            // Owner-only. Unix has no integrity levels, so file permissions are the whole
+            // story here, and the default umask is not a guarantee worth relying on.
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
             Ok(Self { listener, path })
         }
 
