@@ -96,6 +96,9 @@ impl Prompter {
             command.arg("--summary").arg(summary);
         }
         command.arg("--command").arg(launch_summary(entry));
+        // Who signed the program that is about to run. Resolved and checked here rather than
+        // taken from the card, because a card is just a file the app wrote about itself.
+        command.arg("--publisher").arg(publisher_of(entry));
         if let Some(client) = client_pid.and_then(describe_client) {
             command.arg("--client").arg(client);
         }
@@ -169,6 +172,23 @@ pub fn launch_summary(entry: &Entry) -> String {
             .and_then(|l| l.endpoint.as_ref())
             .map(|e| e.address.clone())
             .unwrap_or_else(|| "(no launch stanza)".to_string()),
+    }
+}
+
+/// Authenticode status of the binary this card would launch, phrased for the dialog.
+///
+/// An unsigned program is the common case and says so plainly; the dialog's job is to report it,
+/// not to hide it behind an empty field or to refuse on the user's behalf. A *broken* signature
+/// is a different matter and is spelled out in capitals, because it means the file changed after
+/// someone signed it.
+fn publisher_of(entry: &Entry) -> String {
+    let Some(launch) = entry.card.local.as_ref().and_then(|l| l.launch.as_ref()) else {
+        return String::new();
+    };
+    let lookup = |name: &str| std::env::var(name).ok();
+    match crate::catalog::resolve_command(&launch.command, &lookup) {
+        Some(path) => crate::signature::verify(&path).describe(),
+        None => "the program could not be found".to_string(),
     }
 }
 

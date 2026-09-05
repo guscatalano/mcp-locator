@@ -92,9 +92,9 @@ impl Request {
                  or that something replaced it.\n\n",
             );
             if !self.previous.is_empty() {
-                out.push_str(&format!("Was:\t{}\n", self.previous));
+                out.push_str(&format!("Was:  {}\n", self.previous));
             }
-            out.push_str(&format!("Now:\t{}\n\n", self.command));
+            out.push_str(&format!("Now:  {}\n\n", self.command));
         }
         if !self.summary.is_empty() {
             out.push_str(&self.summary);
@@ -111,24 +111,27 @@ impl Request {
 
     /// The detail a suspicious user needs, behind the expander so it does not shout at the user
     /// who just wants to answer the question.
+    ///
+    /// Laid out with spaces rather than tabs: the task dialog's expanded area does not render a
+    /// tab, so a tab-separated `Starts:` came out with the label welded to its value.
     fn expanded(&self) -> String {
         let mut out = String::new();
         if !self.stale && !self.command.is_empty() {
-            out.push_str(&format!("Starts:\t{}\n", self.command));
+            out.push_str(&format!("Starts:  {}\n", self.command));
         }
         if !self.card.is_empty() {
-            out.push_str(&format!("Registered by:\t{}\n", self.card));
+            out.push_str(&format!("Registered by:  {}\n", self.card));
         }
         if !self.tier.is_empty() {
-            out.push_str(&format!("Trust tier:\t{}\n", self.tier));
+            out.push_str(&format!("Trust tier:  {}\n", self.tier));
         }
         if !self.publisher.is_empty() {
-            out.push_str(&format!("Publisher:\t{}\n", self.publisher));
+            out.push_str(&format!("Publisher:  {}\n", self.publisher));
         }
         if !self.hash.is_empty() {
-            out.push_str(&format!("Bound to:\t{}\n", self.hash));
+            out.push_str(&format!("Bound to:  {}\n", self.hash));
         }
-        out.push_str(&format!("Identifier:\t{}", self.name));
+        out.push_str(&format!("Identifier:  {}", self.name));
         out
     }
 

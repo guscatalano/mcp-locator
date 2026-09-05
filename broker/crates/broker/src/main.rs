@@ -16,6 +16,7 @@ use mcp_locator_broker::dirs::{self, resolve_roots, resolve_state_dir, Root, Tie
 use mcp_locator_broker::install;
 use mcp_locator_broker::prompt::launch_summary;
 use mcp_locator_broker::server::{self, Broker};
+use mcp_locator_broker::signature;
 use std::path::PathBuf;
 
 const USAGE: &str = "mcp-locator-broker — local MCP server discovery and activation
@@ -28,6 +29,7 @@ const USAGE: &str = "mcp-locator-broker — local MCP server discovery and activ
   mcp-locator-broker consent deny <name>
   mcp-locator-broker consent forget <name>
   mcp-locator-broker secure-dirs [--machine]
+  mcp-locator-broker verify <path>
 
 `consent grant` binds the approval to the card's current launch command. Editing that command
 afterwards invalidates the approval, and the server will refuse to start until it is re-granted.";
@@ -74,6 +76,22 @@ async fn main() -> std::io::Result<()> {
             }
             println!("state:    {}", resolve_state_dir().display());
             println!("endpoint: {}", dirs::default_endpoint());
+            Ok(())
+        }
+
+        // Exposed as a command because a signature check nobody can run by hand is a signature
+        // check nobody can audit. Exit code carries the verdict for scripts.
+        "verify" => {
+            let Some(target) = args.get(1) else {
+                eprintln!("usage: mcp-locator-broker verify <path>");
+                std::process::exit(2);
+            };
+            let trust = signature::verify(std::path::Path::new(target));
+            println!("{target}");
+            println!("  {}", trust.describe());
+            if !trust.is_trusted() {
+                std::process::exit(1);
+            }
             Ok(())
         }
 

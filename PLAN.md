@@ -88,12 +88,11 @@ Build order chosen so each step is testable against the previous:
    the record now stores `launchCommand` next to the hash. Prompts are serialized machine-wide
    and low-integrity clients cannot raise one at all.
    Still open: allow-for-this-client scope (`ConsentScope::Client` exists but nothing writes it).
-6. **Bootstrap hardening** — *partly done*: the MSI puts the broker under `%ProgramFiles%` and
-   the client library refuses to launch one from anywhere else, so path containment is real and
-   enforced. Still open: the singleton named mutex, `WinVerifyTrust` verification used by both
-   the TS library and `admin/supersede`, drain/handover, and the `MCP_LOCATOR_DEV=1` escape
-   hatch that goes with them. Signature checking is the one gate that needs a certificate
-   bought before it can mean anything (see Risks).
+6. **Bootstrap hardening** — *mostly done*: the MSI puts the broker under `%ProgramFiles%`, the
+   client library refuses to launch one from anywhere else, and both checks spec/003 §3 calls
+   for are now enforced — path containment and Authenticode. `MCP_LOCATOR_ALLOW_UNSIGNED_BROKER=1`
+   is the development escape hatch. Still open: the singleton named mutex, `admin/supersede`,
+   and drain/handover.
 7. **TS library integration**: broker client in `@mcp-locator/client` — connect, launch-on-demand
    bootstrap, `activate`/`release`/`deactivate`, subscriptions; single public API that degrades
    from broker to brokerless transparently (`status` vs `probablyRunning` stay distinct).

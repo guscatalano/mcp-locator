@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ConsentRecord, ServerCard, Tier } from './types.js';
 import { enumerate } from './catalog.js';
+import { verifySignature } from './signature.js';
 import { resolveRoots } from './dirs.js';
 
 /** Protocol version this client speaks (spec/002 §2). */
@@ -270,6 +271,29 @@ export async function startBroker(
   }
   if (!withinInstallRoot(command, env, platform)) {
     throw new Error(`refusing to launch a broker outside its install root: ${command}`);
+  }
+
+  // The second of the two checks spec/003 §3 calls for. Path containment alone is real — only
+  // an administrator can write to the install root — but it says nothing about *what* was put
+  // there, and an administrator-level compromise or a careless installer can put anything in a
+  // directory that is merely well-known.
+  //
+  // Unsigned is refused rather than warned about, because a warning on a path no human is
+  // watching is not a control. MCP_LOCATOR_ALLOW_UNSIGNED_BROKER exists for developers running
+  // their own builds, and is deliberately loud and deliberately not the default: a check that
+  // is off unless you opt in protects nobody.
+  const trust = verifySignature(command, env);
+  if (trust.state !== 'signed' && env['MCP_LOCATOR_ALLOW_UNSIGNED_BROKER'] !== '1') {
+    throw new Error(
+      `refusing to launch an unverified broker (${trust.state}: ${trust.detail}): ${command}. ` +
+        'Set MCP_LOCATOR_ALLOW_UNSIGNED_BROKER=1 to allow this for a development build.',
+    );
+  }
+  if (trust.state !== 'signed') {
+    process.stderr.write(
+      `mcp-locator: launching an unverified broker (${trust.state}: ${trust.detail}) ` +
+        'because MCP_LOCATOR_ALLOW_UNSIGNED_BROKER=1\n',
+    );
   }
 
   const child = spawn(command, entry.card.local?.launch?.args ?? [], {

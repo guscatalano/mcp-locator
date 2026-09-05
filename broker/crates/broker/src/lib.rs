@@ -10,3 +10,4 @@ pub mod install;
 pub mod prompt;
 pub mod security;
 pub mod server;
+pub mod signature;

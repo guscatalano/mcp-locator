@@ -22,6 +22,7 @@ export { resolveRoots, resolveStateDir } from './dirs.js';
 export { parseCardFile, expandCard, CARD_SUFFIX, type ParseResult } from './parse.js';
 export { expandEnv } from './expand.js';
 export { resolveCommand } from './command.js';
+export { verifySignature, type Trust, type TrustState } from './signature.js';
 export { probablyRunning, type LivenessOptions } from './liveness.js';
 export { readConsentState, consentFor, type ConsentOptions } from './consent.js';
 export { launchHash, canonicalize } from './launchHash.js';

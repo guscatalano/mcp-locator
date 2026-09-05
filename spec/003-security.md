@@ -50,6 +50,36 @@ gets its binary launched by every AI client." Rules, all mandatory:
   binary before the running broker will hand over.
 - Ordinary server cards get the opposite rule: client libraries MUST NOT launch them, ever.
 
+*(Implemented.)* `WinVerifyTrust` in the broker (`mcp-locator-broker verify <path>` exposes it,
+because a signature check nobody can run by hand is a check nobody can audit) and
+`Get-AuthenticodeSignature` in the client library.
+
+The client library deliberately does **not** call the broker's own `verify`. Asking a binary
+whether it can be trusted is a question a tampered one answers "yes"; the verifier has to be
+something the attacker would have had to subvert separately. PowerShell is invoked by absolute
+path out of `System32` — resolving it through `PATH` would move the same problem down one level,
+since `PATH` is user-writable — and `PSModulePath` is pinned to the in-box modules so nothing can
+shadow `Get-AuthenticodeSignature` with its own.
+
+Four outcomes, kept distinct because they mean different things:
+
+| Result | Meaning | Bootstrap |
+|---|---|---|
+| `signed` | valid chain to a trusted root | launch |
+| `unsigned` | no signature — an ordinary local build | refuse |
+| `invalid` | signed but the file changed afterwards, or the root is untrusted | refuse |
+| `unknown` | the check could not run | refuse |
+
+`unknown` refusing is the load-bearing one: "could not check" is precisely the state an attacker
+would like the check to end in, so it must never read as success.
+
+`MCP_LOCATOR_ALLOW_UNSIGNED_BROKER=1` allows an unsigned broker for development, and prints why
+on stderr each time. It is off by default because a check you have to opt into protects nobody.
+
+All four paths were exercised on a clean VM with a self-signed certificate: unsigned refused,
+signed accepted and named, a one-byte edit to the signed binary reported as modified-after-
+signing and refused, and the signer surfaced in the consent dialog's Publisher row.
+
 ## 4. Consent
 
 Stored in `consent.json` in the broker state directory; written only by the broker, readable by
