@@ -60,7 +60,7 @@ impl Broker {
         // Re-read after taking the lock: another connection may have just asked the same
         // question, and the user should not be shown it twice.
         let record = {
-            let engine = self.engine.lock().await;
+            let mut engine = self.engine.lock().await;
             engine.consent.evaluate(&entry.name, &entry.launch_hash)
         };
         if !Prompter::should_ask(record.state) {
@@ -231,7 +231,7 @@ pub async fn dispatch(
             let Some(entry) = find_entry(&name) else {
                 return Response::err(id, INVALID_PARAMS, format!("unknown server: {name}"));
             };
-            let engine = broker.engine.lock().await;
+            let mut engine = broker.engine.lock().await;
             Response::ok(
                 id,
                 json!(engine.consent.evaluate(&name, &entry.launch_hash)),
@@ -250,7 +250,7 @@ pub async fn dispatch(
             // stall every other client. `activate` re-checks it regardless — this only decides
             // whether to ask, never whether to allow.
             let state = {
-                let engine = broker.engine.lock().await;
+                let mut engine = broker.engine.lock().await;
                 engine
                     .consent
                     .evaluate(&entry.name, &entry.launch_hash)

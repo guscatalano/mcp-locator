@@ -97,6 +97,12 @@ the session. One record per server `name`:
 }
 ```
 
+- **The store is shared, and re-read.** `mcp-locator-broker consent grant/deny/forget` writes the
+  same file a running broker holds, and that is the documented way to script an approval. A
+  broker that loaded it only at startup got this wrong in both directions: it re-prompted for
+  servers already approved on disk, and its next write persisted the stale map, silently erasing
+  those decisions. The store now re-reads whenever the file has changed, and every write is a
+  read-modify-write rather than a wholesale replacement.
 - **Consent binds to `launchHash`.** If the card's launch stanza or endpoint changes, existing
   consent becomes `stale` and the user is re-prompted with a diff ("this server's launch command
   changed"). This is the rule that stops a benign registered card from being silently swapped
