@@ -250,6 +250,16 @@ export class Gateway {
       const alias = aliasFor(name, new Set([...this.#active.values()].map((s) => s.alias)));
       this.#active.set(name, { name, grantId: grant.grantId, client, tools, allTools, alias });
 
+      // The broker can take a grant back — a forgotten one is reclaimed once its idle window
+      // elapses — and it does that by closing the relay. Without this the gateway would keep
+      // advertising tools that no longer have a server behind them, and the model would only
+      // find out by calling one. Dropping them and re-announcing is the honest response.
+      client.onclose = () => {
+        if (this.#active.get(name)?.grantId !== grant.grantId) return; // already replaced
+        this.#active.delete(name);
+        void this.server.sendToolListChanged();
+      };
+
       // The whole point of the gateway: tools appear inside the running session.
       await this.server.sendToolListChanged();
 

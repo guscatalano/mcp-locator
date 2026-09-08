@@ -29,6 +29,61 @@ const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// How long a server gets to exit on its own after its stdin is closed, before it is killed.
 const GRACEFUL_SHUTDOWN: Duration = Duration::from_secs(5);
 
+/// How long a stdio grant may sit with no traffic before the broker takes it back.
+///
+/// Generous on purpose. A grant is a claim a client believes it holds, so reaping one is a
+/// surprise: its tools disappear mid-session. Thirty minutes is long enough that no client
+/// working at human pace loses a server it is still using, and short enough that a client which
+/// forgot to release — as an agent looping over many servers reliably does — stops holding a
+/// process open for the rest of the session.
+const DEFAULT_GRANT_IDLE: Duration = Duration::from_secs(1800);
+
+/// Seconds since the broker started. A monotonic base, so a clock change cannot make a grant
+/// look idle for a century or for a negative amount of time.
+fn now_secs() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs()
+}
+
+/// When bytes last moved on a relay, shared between the relay task and the engine.
+#[derive(Clone)]
+struct Activity(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl Activity {
+    fn new() -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+            now_secs(),
+        )))
+    }
+
+    fn touch(&self) {
+        self.0
+            .store(now_secs(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn idle(&self) -> Duration {
+        Duration::from_secs(
+            now_secs().saturating_sub(self.0.load(std::sync::atomic::Ordering::Relaxed)),
+        )
+    }
+}
+
+/// Read the grant idle window from the environment. `0` disables reaping entirely.
+fn grant_idle_from_env() -> Option<Duration> {
+    match std::env::var("MCP_LOCATOR_GRANT_IDLE_SECS") {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(0) => None,
+            Ok(secs) => Some(Duration::from_secs(secs)),
+            // An unreadable value is a misconfiguration, not permission to stop reclaiming.
+            Err(_) => Some(DEFAULT_GRANT_IDLE),
+        },
+        Err(_) => Some(DEFAULT_GRANT_IDLE),
+    }
+}
+
 pub trait DuplexStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> DuplexStream for T {}
 
@@ -91,6 +146,8 @@ enum GrantKind {
 struct StdioGrant {
     child: Child,
     relay: JoinHandle<()>,
+    /// Updated by the relay task whenever bytes move in either direction.
+    activity: Activity,
 }
 
 /// A refcounted `executable`-mode server, shared across grants.
@@ -105,6 +162,8 @@ pub struct Engine {
     pub audit: AuditLog,
     grants: HashMap<String, Grant>,
     shared: HashMap<String, SharedServer>,
+    /// How long a stdio grant may sit idle before it is reclaimed. `None` disables reaping.
+    grant_idle: Option<Duration>,
     #[cfg(windows)]
     job: platform::Job,
 }
@@ -116,6 +175,7 @@ impl Engine {
             audit,
             grants: HashMap::new(),
             shared: HashMap::new(),
+            grant_idle: grant_idle_from_env(),
             // Every child joins this job, so children die with the broker even if it is killed
             // rather than shut down. Without it, a force-killed broker orphans MCP servers.
             #[cfg(windows)]
@@ -215,15 +275,21 @@ impl Engine {
 
         // The client connects after it receives the address, so accepting has to happen in the
         // background — returning the address is what unblocks the client.
+        let activity = Activity::new();
+        let relay_activity = activity.clone();
         let relay = tokio::spawn(async move {
             match listener.accept().await {
-                Ok(stream) => relay(stream, stdin, stdout).await,
+                Ok(stream) => relay(stream, stdin, stdout, relay_activity).await,
                 Err(e) => eprintln!("relay accept failed: {e}"),
             }
         });
 
         Ok((
-            GrantKind::Stdio(Box::new(StdioGrant { child, relay })),
+            GrantKind::Stdio(Box::new(StdioGrant {
+                child,
+                relay,
+                activity,
+            })),
             ConnectionInfo {
                 transport: platform::RELAY_TRANSPORT.to_string(),
                 address,
@@ -380,6 +446,8 @@ impl Engine {
     /// Idle windows that have elapsed with no new grant: stop those servers. Called on a tick by
     /// the serve loop, keeping the timing decision here rather than in the transport.
     pub async fn reap_idle(&mut self) {
+        self.reap_idle_grants().await;
+
         let expired: Vec<String> = self
             .shared
             .iter()
@@ -400,8 +468,50 @@ impl Engine {
         }
     }
 
+    /// Take back stdio grants that have seen no traffic for their idle window.
+    ///
+    /// Only stdio grants: their traffic passes through this broker's relay, so idleness is
+    /// observed rather than guessed. An endpoint-mode client talks to the server directly, and
+    /// the broker would be inventing a number it cannot see — those keep the refcount rule.
+    ///
+    /// A reclaimed grant is recorded as `idle-release` *and* as an ordinary `release`, so the
+    /// audit log still pairs one release to every activate for anyone counting lifetimes.
+    async fn reap_idle_grants(&mut self) {
+        let Some(window) = self.grant_idle else {
+            return;
+        };
+
+        let expired: Vec<(String, String, Option<u32>, Duration)> = self
+            .grants
+            .iter()
+            .filter_map(|(id, grant)| match &grant.kind {
+                GrantKind::Stdio(stdio) => {
+                    let idle = stdio.activity.idle();
+                    (idle >= window)
+                        .then(|| (id.clone(), grant.name.clone(), grant.client_pid, idle))
+                }
+                GrantKind::Endpoint => None,
+            })
+            .collect();
+
+        for (id, name, client_pid, idle) in expired {
+            self.audit.record(
+                "idle-release",
+                &name,
+                client_pid,
+                &format!("{id} idle {}s", idle.as_secs()),
+            );
+            self.release(&id).await;
+        }
+    }
+
     fn idle_timeout(&self, _name: &str) -> Duration {
         DEFAULT_IDLE_TIMEOUT
+    }
+
+    /// Override the stdio grant idle window. Tests use this to avoid waiting half an hour.
+    pub fn set_grant_idle(&mut self, window: Option<Duration>) {
+        self.grant_idle = window;
     }
 
     pub fn grant_count(&self, name: &str) -> usize {
@@ -481,16 +591,42 @@ async fn shutdown(mut child: Child) {
 /// closes. Deliberately dumb: the broker does not parse or rewrite MCP traffic.
 async fn relay(
     stream: Box<dyn DuplexStream>,
-    mut child_stdin: tokio::process::ChildStdin,
-    mut child_stdout: tokio::process::ChildStdout,
+    child_stdin: tokio::process::ChildStdin,
+    child_stdout: tokio::process::ChildStdout,
+    activity: Activity,
 ) {
-    let (mut client_read, mut client_write) = tokio::io::split(stream);
-    let to_child = async { tokio::io::copy(&mut client_read, &mut child_stdin).await };
-    let to_client = async { tokio::io::copy(&mut child_stdout, &mut client_write).await };
+    let (client_read, client_write) = tokio::io::split(stream);
+    let to_child = pump(client_read, child_stdin, activity.clone());
+    let to_client = pump(child_stdout, client_write, activity);
 
     tokio::select! {
         result = to_child => { if let Err(e) = result { eprintln!("relay (client->server) ended: {e}"); } }
         result = to_client => { if let Err(e) = result { eprintln!("relay (server->client) ended: {e}"); } }
+    }
+}
+
+/// Copy one direction of a relay, recording that the grant is in use.
+///
+/// This replaces `tokio::io::copy` for one reason: the engine needs to know when bytes last
+/// moved, and a copy that reports nothing until it finishes cannot say. Each chunk is flushed
+/// rather than buffered — a relay that holds a reply waiting for more bytes would stall a
+/// request/response protocol.
+async fn pump<R, W>(mut from: R, mut to: W, activity: Activity) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut buffer = vec![0u8; 8192];
+    loop {
+        let read = from.read(&mut buffer).await?;
+        if read == 0 {
+            return to.flush().await;
+        }
+        to.write_all(&buffer[..read]).await?;
+        to.flush().await?;
+        activity.touch();
     }
 }
 
