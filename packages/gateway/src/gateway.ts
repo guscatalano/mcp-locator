@@ -27,6 +27,9 @@ const DEFAULT_LIMIT = 50;
 /** Descriptions are advertising copy; a couple of lines is enough to choose by. */
 const COMPACT_DESCRIPTION_CHARS = 110;
 
+/** How many tool names an activation message spells out before summarising the rest. */
+const NAMED_ON_ACTIVATION = 12;
+
 interface ActiveServer {
   name: string;
   grantId: string;
@@ -352,12 +355,19 @@ export function aliasFor(name: string, taken: Set<string>): string {
  * notification already tells the client to re-read, and its own list is the only authority.
  */
 export function activationMessage(name: string, toolNames: string[], withheld = 0): string {
+  // Naming every tool of a hundred-tool server costs about 1.4KB and contradicts the very next
+  // sentence, which tells the model to read its own tool list. A sample is enough to recognise
+  // what arrived; the list itself is the authority, as it says.
+  const shown = toolNames.slice(0, NAMED_ON_ACTIVATION);
+  const rest = toolNames.length - shown.length;
+  const listed = rest > 0 ? `${shown.join(', ')}, and ${rest} more` : shown.join(', ');
+
   const held = withheld
     ? ` ${withheld} other tool(s) were left out because you asked for a subset; activate again without \`tools\` to get them all.`
     : '';
   return (
     `Activated ${name}. Its ${toolNames.length} tool(s) are now in your tool list: ` +
-    `${toolNames.join(', ')}.${held} Your client decides how these are named, so take the exact ` +
+    `${listed}.${held} Your client decides how these are named, so take the exact ` +
     `names from your own tool list rather than assuming a prefix.`
   );
 }

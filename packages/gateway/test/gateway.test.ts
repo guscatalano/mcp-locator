@@ -257,3 +257,17 @@ test('a filtered activation tells the model what it chose not to have', () => {
   assert.match(message, /2 other tool\(s\) were left out/);
   assert.match(message, /without `tools`/, 'the way back must be in the message');
 });
+
+test('activating a hundred-tool server does not spend a kilobyte naming them all', () => {
+  const many = Array.from({ length: 100 }, (_, i) => (i === 0 ? 'ping' : `photos_op${i}`));
+
+  const message = activationMessage('com.stress.v07.photos0007', many);
+
+  // Found by the stress run: the message that exists to save context was itself ~1.4KB, and
+  // spelling out all hundred names contradicts its own next sentence.
+  assert.ok(message.length < 400, `message was ${message.length}B`);
+  assert.match(message, /Its 100 tool\(s\)/, 'the count is the useful part');
+  assert.match(message, /ping, photos_op1/, 'a sample still shows what arrived');
+  assert.match(message, /and 88 more/);
+  assert.doesNotMatch(message, /photos_op99/, 'the tail belongs in the tool list, not here');
+});
