@@ -15,11 +15,26 @@ import { SocketClientTransport } from './socketTransport.js';
 /** Separates the server's short name from the tool's own name: `notes.search`. */
 const NAMESPACE_SEPARATOR = '.';
 
+/**
+ * How many servers one `list_servers` call returns by default.
+ *
+ * Discovery is the one call a model always makes, so its cost is paid every session. A machine
+ * with a thousand registered servers would otherwise answer the first question with a hundred
+ * thousand tokens of catalogue — more context than the tools it exists to keep out.
+ */
+const DEFAULT_LIMIT = 50;
+
+/** Descriptions are advertising copy; a couple of lines is enough to choose by. */
+const COMPACT_DESCRIPTION_CHARS = 110;
+
 interface ActiveServer {
   name: string;
   grantId: string;
   client: Client;
+  /** Exposed to the model. A subset of `allTools` when `activate` was given a filter. */
   tools: Tool[];
+  /** Everything the server offers, kept so a call to a filtered-out tool can explain itself. */
+  allTools: Tool[];
   /** Short name used to namespace this server's tools. */
   alias: string;
 }
@@ -28,10 +43,29 @@ const META_TOOLS: Tool[] = [
   {
     name: 'list_servers',
     description:
-      'List the MCP servers registered on this machine, with their state and whether the user has approved them. Call this first to discover what is available.',
+      'List the MCP servers registered on this machine, with their state and whether the user has approved them. Call this first to discover what is available. Narrow a long list with `query` rather than paging through all of it.',
     inputSchema: {
       type: 'object',
       properties: {
+        query: {
+          type: 'string',
+          description:
+            'Only list servers whose name or description contains this text. Case-insensitive.',
+        },
+        detail: {
+          type: 'string',
+          enum: ['compact', 'full'],
+          description:
+            'compact (default) gives one line per server: name, status, short description. full adds version, trust tier and consent state as JSON.',
+        },
+        limit: {
+          type: 'number',
+          description: `Maximum servers to return. Defaults to ${DEFAULT_LIMIT}.`,
+        },
+        cursor: {
+          type: 'string',
+          description: 'Continue a previous listing, using the cursor it returned.',
+        },
         includeOrphaned: {
           type: 'boolean',
           description: 'Include servers whose program is no longer installed. Defaults to false.',
@@ -42,10 +76,18 @@ const META_TOOLS: Tool[] = [
   {
     name: 'activate',
     description:
-      "Start a registered MCP server and expose its tools. The server's tools become callable as `<alias>.<tool>` immediately after this returns. Requires that the user has already approved the server.",
+      'Start a registered MCP server and expose its tools, which become callable immediately after this returns. Requires that the user has already approved the server. Pass `tools` to expose only the ones you need from a server that offers many.',
     inputSchema: {
       type: 'object',
-      properties: { name: { type: 'string', description: 'Server name, e.g. com.example.notes' } },
+      properties: {
+        name: { type: 'string', description: 'Server name, e.g. com.example.notes' },
+        tools: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            "Expose only these tools, named as the server itself names them (no prefix). Omit to expose all of them. Use this when a server offers many tools and you only need a few — every exposed tool's schema costs context.",
+        },
+      },
       required: ['name'],
     },
   },
@@ -94,9 +136,12 @@ export class Gateway {
       const { name, arguments: args } = request.params;
       switch (name) {
         case 'list_servers':
-          return this.#listServers(Boolean((args as { includeOrphaned?: boolean })?.includeOrphaned));
+          return this.#listServers((args ?? {}) as ListOptions);
         case 'activate':
-          return this.#activate(String((args as { name?: string })?.name ?? ''));
+          return this.#activate(
+            String((args as { name?: string })?.name ?? ''),
+            (args as { tools?: unknown })?.tools,
+          );
         case 'deactivate':
           return this.#deactivate(String((args as { name?: string })?.name ?? ''));
         default:
@@ -124,9 +169,9 @@ export class Gateway {
     );
   }
 
-  async #listServers(includeOrphaned: boolean) {
+  async #listServers(options: ListOptions) {
     const broker = await this.#brokerClient();
-    const servers = await broker.list(includeOrphaned);
+    const servers = await broker.list(Boolean(options.includeOrphaned));
 
     const rows = servers
       // The broker registers itself as a card so client libraries can find and start it. It is
@@ -134,32 +179,39 @@ export class Gateway {
       // only possible outcome is a failed handshake.
       .filter((server: BrokerServer) => server.name !== BROKER_CARD)
       .map((server: BrokerServer) => ({
-      name: server.name,
-      title: server.title,
-      description: server.description,
-      version: server.version,
-      trust: server.tier,
-      state: server.state,
-      consent: server.consent.state,
-      activated: this.#active.has(server.name),
-      // Being explicit here keeps the model from trying to activate something that will refuse.
-      activatable:
-        server.consent.state === 'granted' && !server.orphaned && !this.#active.has(server.name),
-    }));
+        name: server.name,
+        title: server.title,
+        description: server.description,
+        version: server.version,
+        trust: server.tier,
+        state: server.state,
+        consent: server.consent.state,
+        activated: this.#active.has(server.name),
+        // Being explicit here keeps the model from trying to activate something that will refuse.
+        activatable:
+          server.consent.state === 'granted' && !server.orphaned && !this.#active.has(server.name),
+        status: statusOf(server, this.#active.has(server.name)),
+      }));
 
-    const unapproved = rows.filter((r) => r.consent !== 'granted').length;
-    const hint = unapproved
-      ? `\n\n${unapproved} server(s) need the user's approval before they can be activated; the user grants that outside this conversation.`
-      : '';
-
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(rows, null, 2) + hint }],
-    };
+    return textResult(renderServerList(rows, options));
   }
 
-  async #activate(name: string) {
+  async #activate(name: string, requested?: unknown) {
     if (!name) return errorResult('activate requires a server name');
     if (this.#active.has(name)) return textResult(`${name} is already active.`);
+
+    let wanted: string[] | undefined;
+    if (requested !== undefined) {
+      if (!Array.isArray(requested) || requested.some((t) => typeof t !== 'string')) {
+        return errorResult('activate: `tools` must be an array of tool names');
+      }
+      wanted = requested as string[];
+      if (wanted.length === 0) {
+        return errorResult(
+          'activate: `tools` was empty. Omit it to expose every tool, or name the ones you need.',
+        );
+      }
+    }
 
     const broker = await this.#brokerClient();
 
@@ -180,17 +232,30 @@ export class Gateway {
     const client = new Client({ name: 'mcp-locator-gateway', version: '0.1.0' });
     try {
       await client.connect(new SocketClientTransport(grant.connection.address));
-      const { tools } = await client.listTools();
+      const { tools: allTools } = await client.listTools();
+
+      const selected = selectTools(name, allTools, wanted);
+      if ('error' in selected) {
+        // Fail rather than quietly exposing a subset the model did not ask for: it would go on
+        // to call a tool that is not there, which is the failure this whole change is about.
+        await client.close().catch(() => {});
+        await broker.release(grant.grantId).catch(() => {});
+        return errorResult(selected.error);
+      }
+      const tools = selected.tools;
+
       const alias = aliasFor(name, new Set([...this.#active.values()].map((s) => s.alias)));
-      this.#active.set(name, { name, grantId: grant.grantId, client, tools, alias });
+      this.#active.set(name, { name, grantId: grant.grantId, client, tools, allTools, alias });
 
       // The whole point of the gateway: tools appear inside the running session.
       await this.server.sendToolListChanged();
 
       return textResult(
-        `Activated ${name}. ${tools.length} tool(s) now available as ${alias}${NAMESPACE_SEPARATOR}*: ${tools
-          .map((t) => t.name)
-          .join(', ')}`,
+        activationMessage(
+          name,
+          tools.map((t) => t.name),
+          allTools.length - tools.length,
+        ),
       );
     } catch (e) {
       // Never leave a grant dangling because the MCP handshake failed after the broker
@@ -222,6 +287,20 @@ export class Gateway {
     if (!server) {
       return errorResult(
         `unknown tool: ${namespaced}. Activate the server that provides it first, or call list_servers to see what is available.`,
+      );
+    }
+
+    // A tool held back by an `activate` filter is not callable. Forwarding it anyway would make
+    // the filter advisory, and a model that guessed a name would get a different answer from a
+    // model that read the tool list.
+    if (!server.tools.some((t) => t.name === toolName)) {
+      const withheld = server.allTools.some((t) => t.name === toolName);
+      return errorResult(
+        withheld
+          ? `${toolName} was not exposed when ${server.name} was activated. Deactivate it and activate again, either without a tools filter or including ${toolName}.`
+          : `${server.name} has no tool called ${toolName}. It exposes: ${server.tools
+              .map((t) => t.name)
+              .join(', ')}.`,
       );
     }
 
@@ -260,6 +339,144 @@ export function aliasFor(name: string, taken: Set<string>): string {
   let n = 2;
   while (taken.has(`${base}${n}`)) n++;
   return `${base}${n}`;
+}
+
+/**
+ * What `activate` reports back to the model.
+ *
+ * It names the tools but deliberately never claims what the *client* will call them.
+ * `alias.tool` is this gateway's wire naming, and a client is free to rewrite it: Hermes
+ * presents `weather.forecast` to its model as `mcp__mcp_locator__weather_forecast`. An earlier
+ * version of this message advertised the wire name, a model believed it, asked for a tool that
+ * did not exist under that name, and spent two round trips recovering. The `tools/list_changed`
+ * notification already tells the client to re-read, and its own list is the only authority.
+ */
+export function activationMessage(name: string, toolNames: string[], withheld = 0): string {
+  const held = withheld
+    ? ` ${withheld} other tool(s) were left out because you asked for a subset; activate again without \`tools\` to get them all.`
+    : '';
+  return (
+    `Activated ${name}. Its ${toolNames.length} tool(s) are now in your tool list: ` +
+    `${toolNames.join(', ')}.${held} Your client decides how these are named, so take the exact ` +
+    `names from your own tool list rather than assuming a prefix.`
+  );
+}
+
+/**
+ * Narrow a server's tools to the ones `activate` asked for.
+ *
+ * An unknown name is an error rather than a silent omission. Dropping it would leave the model
+ * believing it had a tool it does not have — the same failure as advertising a name the client
+ * never registered, arrived at from the other direction.
+ */
+export function selectTools(
+  server: string,
+  allTools: Tool[],
+  wanted?: string[],
+): { tools: Tool[] } | { error: string } {
+  if (!wanted) return { tools: allTools };
+
+  const offered = allTools.map((t) => t.name);
+  const unknown = wanted.filter((t) => !offered.includes(t));
+  if (unknown.length) {
+    return {
+      error: `${server} does not offer ${unknown.join(', ')}. It offers: ${offered.join(', ')}.`,
+    };
+  }
+  return { tools: allTools.filter((t) => wanted.includes(t.name)) };
+}
+
+/** Options accepted by `list_servers`. */
+export interface ListOptions {
+  query?: string;
+  detail?: string;
+  limit?: number;
+  cursor?: string;
+  includeOrphaned?: boolean;
+}
+
+/** The shape `list_servers` works with — the broker's row plus what this gateway knows. */
+export interface ServerRow {
+  name: string;
+  title?: string | null;
+  description: string;
+  version: string;
+  trust: string;
+  state: string;
+  consent: string;
+  activated: boolean;
+  activatable: boolean;
+  status: string;
+}
+
+/** One word for what the model can do with this server right now. */
+export function statusOf(
+  server: { orphaned: boolean; consent: { state: string } },
+  activated: boolean,
+): string {
+  if (activated) return 'active';
+  if (server.orphaned) return 'unavailable';
+  if (server.consent.state !== 'granted') return 'needs-approval';
+  return 'ready';
+}
+
+function clip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max);
+  const boundary = cut.lastIndexOf(' ');
+  return `${cut.slice(0, boundary > max * 0.6 ? boundary : max).trimEnd()}…`;
+}
+
+/**
+ * Render a catalogue for the model, narrowed and paged.
+ *
+ * Compact is the default because this is the one call every session makes. A full row costs
+ * roughly 280 bytes once pretty-printed; a compact line costs about 60, and the pretty-printing
+ * alone — newlines and two-space indents on nine fields — was a fifth of the payload. Detail is
+ * available on request, which is the right way round: pay for it when a choice needs it.
+ */
+export function renderServerList(rows: ServerRow[], options: ListOptions = {}): string {
+  const query = options.query?.trim().toLowerCase();
+  const matched = query
+    ? rows.filter((r) =>
+        `${r.name} ${r.title ?? ''} ${r.description}`.toLowerCase().includes(query),
+      )
+    : rows;
+
+  const offset = Number.parseInt(options.cursor ?? '0', 10);
+  const start = Number.isFinite(offset) && offset > 0 ? offset : 0;
+  const limit =
+    typeof options.limit === 'number' && options.limit > 0 ? Math.floor(options.limit) : DEFAULT_LIMIT;
+  const page = matched.slice(start, start + limit);
+
+  const body =
+    options.detail === 'full'
+      ? JSON.stringify(page)
+      : page.map((r) => `${r.name}  ${r.status}  ${clip(r.description, COMPACT_DESCRIPTION_CHARS)}`).join('\n');
+
+  const notes: string[] = [];
+  if (!matched.length) {
+    notes.push(
+      query
+        ? `No server matches "${options.query}". Call again without a query to see everything.`
+        : 'No servers are registered on this machine.',
+    );
+  }
+  const remaining = matched.length - (start + page.length);
+  if (remaining > 0) {
+    notes.push(
+      `${remaining} more not shown. Narrow with \`query\`, or pass cursor "${start + page.length}" to continue.`,
+    );
+  }
+  const unapproved = page.filter((r) => r.consent !== 'granted').length;
+  if (unapproved) {
+    notes.push(
+      `${unapproved} server(s) need the user's approval before they can be activated; the user grants that outside this conversation.`,
+    );
+  }
+
+  return [body, notes.join(' ')].filter(Boolean).join('\n\n');
 }
 
 function textResult(text: string) {
