@@ -62,8 +62,11 @@ Build order chosen so each step is testable against the previous:
 
 1. **Pipe server + protocol** (`crates/proto`, `crates/broker`) — *done, except as noted*:
    newline-delimited JSON-RPC over named pipe `\\.\pipe\mcp-locator\broker\v1` (unix socket
-   elsewhere, so all three CI platforms build), `handshake`, `list`, `status`. Still open:
-   the SDDL ACL (user SID + low-IL connect ACE) and `subscribe`.
+   elsewhere, so all three CI platforms build), `handshake`, `list`, `status`. The SDDL ACL is
+   now applied to both pipes (`crates/broker/src/security.rs`), with a deliberate asymmetry: the
+   broker pipe is labelled Low so a sandboxed client can still discover, while each relay pipe is
+   labelled at the requesting client's own integrity level so nothing below it can hijack a
+   grant. Still open: `subscribe`.
 2. **Derived catalog** — *done, except file-watching*: card parsing, tier shadowing, orphan
    detection, and env expansion, driven by the same conformance fixtures as the TS library and
    asserted against the same expected JSON. The notify-crate watcher is still to come.
@@ -74,11 +77,15 @@ Build order chosen so each step is testable against the previous:
    no orphans), per-grant relay pipe `\\.\pipe\mcp-locator\conn\<grantId>`, grants table, and
    client-death cleanup via connection close rather than process-handle waiting (see spec/002 §3
    for why). One child per grant for stdio; refcounted sharing for endpoint-mode servers.
-   Still open: ACLing each relay pipe to the requesting client's token.
+   Each relay pipe is ACL'd to the requesting client's token (see step 1).
 4. **Lifetime state machine** — *mostly done*: idle timers, graceful shutdown (close stdin →
    grace → kill), `deactivate`/`force` naming its holders, and the registered/running/idle
-   transitions. Still open: server-crash detection and the `runtime.json` snapshot +
-   reconcile-on-start.
+   transitions. Stdio grants now have an idle window of their own (30 min default,
+   `MCP_LOCATOR_GRANT_IDLE_SECS`): the relay records when bytes last moved, so a grant a client
+   forgot to release is reclaimed rather than held for the life of the session. Idleness is
+   *observed* there, which is why it applies to stdio only — an endpoint-mode client talks to its
+   server directly and the broker would be inventing a number it cannot see.
+   Still open: server-crash detection and the `runtime.json` snapshot + reconcile-on-start.
 5. **Consent** — *done*: `consent.json` writer with atomic replace, `launchHash` binding with
    stale detection, enforcement at activation, and the Win32 TaskDialog helper
    (`crates/consent-ui`) showing the server, its launch command, the card's origin and tier, and
@@ -125,10 +132,13 @@ release; 9 can trail.
 3. ✔ Release-on-exit, plus release-on-failed-handshake so a server that starts but does not
    speak MCP cannot leave a dangling grant.
 4. ✔ Broker client in `@mcp-locator/client` (`BrokerClient`), with the spec/003 §3 bootstrap
-   rules enforced: system-tier card only, command must resolve inside the install root.
-   Signature verification still to come.
-5. ✔ Onboarding docs in the README and INSTALL.md. Still open: a demo recording with a real
-   AI client.
+   rules enforced: system-tier card only, command must resolve inside the install root, and
+   Authenticode verified before launch (`MCP_LOCATOR_ALLOW_UNSIGNED_BROKER=1` to override for a
+   development build). All four verification outcomes were proven on a sandbox with a self-signed
+   certificate: unsigned refused, signed accepted and named, a one-byte edit caught as "modified
+   after it was signed", and the publisher surfaced in the consent dialog.
+5. ✔ Onboarding docs in the README and INSTALL.md, and the gateway has now been driven end to end
+   by a third-party AI client (see "Proven against a real client" below).
 
 The gateway ships as a single bundled `.mjs` (esbuild) so the MSI can install it without a
 `node_modules` tree. That required the client library's two `createRequire` calls to become
@@ -139,6 +149,84 @@ Exit criterion met end to end: a real MCP client sees only the three meta-tools,
 demo server, activates it, watches `notes.echo` / `notes.add` appear mid-session, calls one and
 reaches the child process, then deactivates and watches them disappear.
 
+## Proven against a real client, and against scale
+
+Two exercises after M3, on the same disposable Windows 11 VM. Both changed the plan.
+
+**A third-party AI client drove it end to end.** Hermes — an independent MCP client, unmodified
+and told nothing but `node` and one path — discovered two registered servers, activated one, called
+it, and released it. The broker's audit log records the grant lifecycle independently of anything
+the model said, which is what makes it a result rather than an anecdote: one server activated and
+released 49s apart, its neighbour never touched.
+
+**A thousand registered servers, and an agent churning a hundred of them.** This is where the
+design's central claim was actually tested, and where most of the following work came from.
+
+| Measured with 1000 servers registered | |
+|---|---|
+| Tool-list floor, nothing activated | **1,948 B** — the whole premise, in one number |
+| `list_servers`, default compact page of 50 | 4,371 B (was ~326 KB for all rows, pretty-printed) |
+| One 100-tool server, fully activated | 33,157 B |
+| The same server, `tools: ["ping"]` | 2,499 B |
+| 100 × activate → call → deactivate | 41 s, 0 failures, every grant paired |
+| activate / tool call / deactivate | 355 ms / 2 ms / 21 ms |
+
+What that produced, all now done:
+
+- **Discovery is paged and searchable.** `list_servers` defaults to one compact line per server and
+  takes `query`, `limit` and `cursor`. Returning every row was worse than the problem this project
+  exists to solve — 83k tokens for the one call a model always makes first.
+- **Activation is selective.** `activate` takes a `tools` filter, so a server offering a hundred
+  tools need not spend a hundred schemas to be useful. An unknown name is an error rather than a
+  silent omission, and a withheld tool is refused at call time so the filter is not advisory.
+- **The gateway stopped claiming what its client would call things.** `activate` used to advertise
+  `<alias>.<tool>`; Hermes renames tools under its own prefix, the model believed us, and it spent
+  two round trips recovering from a name that did not exist. The gateway is not in the call path
+  and is in no position to say. `tools/list_changed` already tells the client to re-read.
+- **The activation message stopped spending what activation saved** — a 100-tool server produced a
+  1.4 KB reply naming every tool. Every unit test passed while that was true; nothing in them had
+  more than three tools.
+- **Forgotten grants are reclaimed** (M2.4 above). The agent held two of its hundred servers for
+  40 and 25 minutes, then reported it had released everything.
+- **The gateway exits when its client does.** It handled SIGINT/SIGTERM, but a client that dies
+  sends no signal — stdin simply closes. Every crashed client stranded a gateway holding a broker
+  connection. The reaper alone would not have covered this: grants would be reclaimed while the
+  process that took them lived on.
+- **The gateway drops servers whose relay closes**, so a reclaimed grant does not leave a model
+  holding tool names with nothing behind them.
+
+Two lessons worth keeping rather than just the fixes:
+
+**A model's self-report is not evidence.** The agent stated, with a described verification method,
+that it had kept one server active at a time. The audit log showed otherwise. Keep the invariant
+that makes that checkable — one `release` for every `activate`, even when the broker reclaims a
+grant itself — and prefer the broker's record to the model's summary in every test.
+
+**Scale is a different test, not a bigger one.** Three of the items above passed the entire unit
+suite. They were only reachable with a thousand cards and a server with a hundred tools.
+
+### Still open from this work
+
+- **Tool manifests in the card** (biggest remaining item; needs a schema change, all three parsers,
+  and conformance vectors). `query` searches a one-line server description today, so a server whose
+  blurb says "productivity suite" is unfindable even though it has a `send_email` tool. A declared
+  manifest would make search useful *and* let a model use `activate(tools: […])` without first
+  guessing names or activating once to see them. Drift is the cost: the manifest is a hint, and the
+  running server stays authoritative.
+- **`list_servers` should show what the caller already holds.** The agent had no cheap way to notice
+  it had leaked two grants. `status: active` is in the listing but nothing draws a client to it.
+- **Broker-side narrowing.** `locator/list` ships every card over the pipe — 349 KB and ~1 s for a
+  thousand — and the gateway then renders 6 KB of it. Never a context cost, but the gateway should
+  not be the only place that narrows.
+- **`consent grant` has no bulk form.** Approving a thousand servers took 198 s of sequential
+  process spawns.
+- **`DEFAULT_LIMIT = 50` is a guess.** Nothing measured says fifty is the right page.
+- **An orphaned card should say why.** A card whose command will not resolve reports
+  `orphaned: true` and no reason. Installing Node and a server in one session leaves a stale `PATH`
+  in the calling process, and the card reads as broken when the environment is at fault.
+- **Models still guess tool names** even when told to read their own list. Worth watching; not
+  obviously ours to fix.
+
 ## M4 — Federation + upstream (incremental, in value order)
 
 1. **MSIX `appExtension` provider** (highest local value: the `package` trust tier).
@@ -148,6 +236,28 @@ reaches the child process, then deactivates and watches them disappear.
 4. **Windows ODR provider**: wrap `odr.exe` / the host API; revisit when ODR reaches GA.
 5. **Upstream**: propose "local server cards" as an extensions-track SEP — the spec/001 diff
    against SEP-2127 plus the running implementation.
+
+## Where this stands
+
+M0, M1 and M3 are done. M2 met its exit demo and is down to a tail. Everything below is what
+remains; nothing else in this document is outstanding.
+
+| | Remaining |
+|---|---|
+| **M2.1 / 2 / 7** | `subscribe` + the notify-crate file watcher, and the client-library subscriptions that ride on them. One feature across three steps: today a catalogue change is invisible until something re-lists. |
+| **M2.4** | Server-crash detection, `runtime.json` snapshot and reconcile-on-start. A broker restart currently forgets what was running. |
+| **M2.5** | Per-client consent scope — `ConsentScope::Client` exists in the store and nothing writes it. |
+| **M2.6** | Singleton named mutex, `admin/supersede`, drain/handover. Two brokers can still race. |
+| **M2.8** | CLI verbs against a live broker: `activate`, `deactivate`, `status`. The broker has `serve`, `list`, `dirs`, `verify`, `consent`, `secure-dirs`. |
+| **M2.9** | An OV/EV certificate. The only item needing someone other than us; `-Sign` is already wired through `installer/build.ps1`. |
+| **M3.2** | Mirror resources and prompts, not just tools. |
+| **Scale work** | Card tool manifests, and the smaller items listed above. |
+| **M4** | All five items, untouched. |
+
+Sequencing: the certificate is the only external dependency and gates a public release, so start
+it now regardless of what else is in flight. Tool manifests are the largest remaining design
+change and touch the schema, so they want doing before M4 hardens anything around cards.
+`subscribe` + watching is the last piece of the original M2 that a user would notice.
 
 ## Cross-cutting
 
@@ -183,6 +293,11 @@ Keep the loop: build the MSI, install it on a fresh sandbox, and run the end-to-
 before calling a release done. The check must assert rather than print — the gateway reports
 refusals as tool *content*, so a script that only catches thrown errors passes a run in which
 nothing worked.
+
+Two more bugs came from the scale run rather than a clean install, and they generalise the rule:
+the activation message that spelled out a hundred tool names, and the gateway that outlived its
+client. Both passed every unit test. Add a fixture with a hundred tools and a run that kills a
+client mid-session; a suite whose largest server has three tools cannot see either.
 
 ## Risks
 

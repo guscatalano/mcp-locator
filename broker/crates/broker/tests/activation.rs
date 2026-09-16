@@ -324,3 +324,67 @@ async fn open_relay(address: &str) -> tokio::net::UnixStream {
     }
     panic!("relay socket never became available: {address}");
 }
+
+#[tokio::test]
+async fn a_stdio_grant_left_idle_is_reclaimed() {
+    // The failure this guards against was observed, not imagined: an agent looping over many
+    // servers activated one, moved on, and held it for forty minutes without ever calling it.
+    let fixture = Fixture::new("idle-grant");
+    fixture.stdio_card("com.example.echo");
+    let mut engine = fixture.granted_engine("com.example.echo");
+    engine.set_grant_idle(Some(std::time::Duration::from_secs(0)));
+
+    let grant = engine
+        .activate(&fixture.entry("com.example.echo"), 1, Some(42))
+        .await
+        .expect("activation should succeed");
+    assert_eq!(engine.grant_count("com.example.echo"), 1);
+
+    engine.reap_idle().await;
+
+    assert_eq!(
+        engine.grant_count("com.example.echo"),
+        0,
+        "grant {} should have been reclaimed",
+        grant.grant_id
+    );
+}
+
+#[tokio::test]
+async fn reaping_can_be_switched_off() {
+    let fixture = Fixture::new("idle-off");
+    fixture.stdio_card("com.example.echo");
+    let mut engine = fixture.granted_engine("com.example.echo");
+    // A zero window would otherwise reclaim it immediately; None means never.
+    engine.set_grant_idle(None);
+
+    engine
+        .activate(&fixture.entry("com.example.echo"), 1, Some(42))
+        .await
+        .expect("activation should succeed");
+
+    engine.reap_idle().await;
+
+    assert_eq!(
+        engine.grant_count("com.example.echo"),
+        1,
+        "nothing should be reclaimed"
+    );
+}
+
+#[tokio::test]
+async fn a_grant_within_its_window_is_left_alone() {
+    let fixture = Fixture::new("idle-young");
+    fixture.stdio_card("com.example.echo");
+    let mut engine = fixture.granted_engine("com.example.echo");
+    engine.set_grant_idle(Some(std::time::Duration::from_secs(3600)));
+
+    engine
+        .activate(&fixture.entry("com.example.echo"), 1, Some(42))
+        .await
+        .expect("activation should succeed");
+
+    engine.reap_idle().await;
+
+    assert_eq!(engine.grant_count("com.example.echo"), 1);
+}

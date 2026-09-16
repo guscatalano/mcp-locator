@@ -14,12 +14,23 @@ export { SocketClientTransport } from './socketTransport.js';
 async function main(): Promise<void> {
   const gateway = new Gateway({ autostartBroker: true });
 
+  let stopping = false;
   const shutdown = async () => {
+    if (stopping) return; // stdin usually reports both 'end' and 'close'
+    stopping = true;
     await gateway.shutdown();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // A stdio server's lifetime is its stdin. When the client goes away — cleanly, by crashing, or
+  // by being killed — stdin closes and nothing will ever arrive again. Without this the gateway
+  // outlives its client: one was left running after its host process was killed, holding a
+  // broker connection and every grant it had taken. Signals do not cover it, because a client
+  // that dies never sends one.
+  process.stdin.on('end', shutdown);
+  process.stdin.on('close', shutdown);
 
   await gateway.server.connect(new StdioServerTransport());
 }
